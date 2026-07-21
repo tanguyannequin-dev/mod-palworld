@@ -251,24 +251,32 @@ function Picker.clear_working()
     invalidate_summary()
 end
 
-function Picker.setup(watchlist)
+function Picker.open(current_watchlist)
+    Picker.open_flag = true
     Picker.search = ""
     Picker.focus = 1
     Picker.scroll = 0
     Picker.footer_focus = 0
-    Picker.working = copy_list(watchlist)
+    Picker.working = copy_list(Config.normalize_watchlist(current_watchlist))
     Picker.status = ""
-    refilter()
     invalidate_summary()
+    Picker.ensure_catalog(nil)
+    refilter()
 end
 
-function Picker.commit()
-    return Picker.working
+function Picker.close_apply()
+    local label = Config.apply_watchlist(Picker.working)
+    label = Config.watchlist_label(Config.current, Picker._names)
+    Picker.open_flag = false
+    Picker.status = ""
+    Picker.footer_focus = 0
+    return label
 end
 
 function Picker.discard()
-    Picker.working = {}
-    invalidate_summary()
+    Picker.open_flag = false
+    Picker.status = ""
+    Picker.footer_focus = 0
 end
 
 function Picker.handle(dir)

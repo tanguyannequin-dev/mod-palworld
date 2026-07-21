@@ -1,4 +1,4 @@
-From 3a6db371dfba146eee75452f0630040e4e9dfa2e Mon Sep 17 00:00:00 2001
+From 6bd27dfa042d482758ac28f57b78dfb5540cabdd Mon Sep 17 00:00:00 2001
 From: contact71 <contact@etabli-digital.com>
 Date: Tue, 21 Jul 2026 16:24:46 +0200
 Subject: [PATCH] Introduce PalScouter localization, keyboard navigation
@@ -10,23 +10,23 @@ Subject: [PATCH] Introduce PalScouter localization, keyboard navigation
  PalScouter/Scripts/direction.lua      |   41 +
  PalScouter/Scripts/gamedata.lua       |  744 ++++++++++++
  PalScouter/Scripts/localization.lua   |  535 ++++++++
- PalScouter/Scripts/main.lua           |  923 ++++++++++++++
+ PalScouter/Scripts/main.lua           |  947 +++++++++++++++
  PalScouter/Scripts/pal_icon_names.lua |  420 +++++++
  PalScouter/Scripts/passive_ranks.lua  |  250 ++++
  PalScouter/Scripts/passive_tags.lua   |   72 ++
  PalScouter/Scripts/profile.lua        |  154 +++
- PalScouter/Scripts/scanner.lua        |  924 ++++++++++++++
+ PalScouter/Scripts/scanner.lua        |  994 +++++++++++++++
  PalScouter/Scripts/score.lua          |  270 +++++
  PalScouter/Scripts/ui.lua             | 1620 +++++++++++++++++++++++++
  PalScouter/Scripts/ui_card.lua        |  266 ++++
  PalScouter/Scripts/ui_list.lua        |  161 +++
- PalScouter/Scripts/ui_pal_picker.lua  |  487 ++++++++
+ PalScouter/Scripts/ui_pal_picker.lua  |  495 ++++++++
  PalScouter/Scripts/ui_settings.lua    |  223 ++++
- PalScouter/Scripts/util.lua           |  159 +++
+ PalScouter/Scripts/util.lua           |  175 +++
  PalScouter/Scripts/waza_ids.lua       |  396 ++++++
  PalScouter/dlls/main.dll              |  Bin 0 -> 517632 bytes
  README.md                             |   58 +-
- 21 files changed, 8453 insertions(+), 1 deletion(-)
+ 21 files changed, 8571 insertions(+), 1 deletion(-)
  create mode 100644 PalScouter/PalScouter.userconfig.lua
  create mode 100644 PalScouter/Scripts/config.lua
  create mode 100644 PalScouter/Scripts/direction.lua
@@ -2151,10 +2151,10 @@ index 0000000..d4d518f
 +return L
 diff --git a/PalScouter/Scripts/main.lua b/PalScouter/Scripts/main.lua
 new file mode 100644
-index 0000000..0402cba
+index 0000000..7bcbfb3
 --- /dev/null
 +++ b/PalScouter/Scripts/main.lua
-@@ -0,0 +1,923 @@
+@@ -0,0 +1,947 @@
 +-- PalScouter — client-only Pal stats, IVs, and nearby wild-Pal scouting.
 +-- Entry point: config, keybinds, scan schedulers, HUD hook lifecycle.
 +--
@@ -2413,8 +2413,30 @@ index 0000000..0402cba
 +    end
 +end
 +
++local function check_schedulers_heartbeat()
++    if not cfg.Enabled then return end
++    local now = os.clock()
++    if (cfg.AimCard.ShowMode or "always") ~= "off" and not aim_scan_paused_for_modal() then
++        if State.last_aim_tick == nil or (now - State.last_aim_tick > 5.0) then
++            State.aim_queued = false
++            State.last_aim_tick = now
++            pcall(schedule_aim)
++        end
++    end
++    if Scanner.nearby.active and not nearby_scan_paused_for_modal() then
++        if State.last_nearby_tick == nil or (now - State.last_nearby_tick > 5.0) then
++            State.nearby_queued = false
++            State.last_nearby_tick = now
++            pcall(schedule_nearby)
++        end
++    end
++end
++
 +local function on_draw_hud(context)
 +    State.frame = State.frame + 1
++    if State.frame % 60 == 0 then
++        pcall(check_schedulers_heartbeat)
++    end
 +    pcall(Profile.span, "hud.draw", draw_hud, context)
 +end
 +
@@ -2473,6 +2495,7 @@ index 0000000..0402cba
 +        if cfg.Enabled and (cfg.AimCard.ShowMode or "always") ~= "off"
 +            and not aim_scan_paused_for_modal() and not State.aim_queued then
 +            Util.run_queued_game_thread(State, "aim_queued", function()
++                State.last_aim_tick = os.clock()
 +                -- Recheck at execution time: user may have switched to OFF
 +                -- or opened a modal while this callback sat in the queue.
 +                if not cfg.Enabled or aim_scan_paused_for_modal()
@@ -2523,6 +2546,7 @@ index 0000000..0402cba
 +                return
 +            end
 +            local queued = Util.run_queued_game_thread(State, "nearby_queued", function()
++                State.last_nearby_tick = os.clock()
 +                if gen == nearby_loop_gen and Scanner.nearby.active
 +                    and not nearby_scan_paused_for_modal() then
 +                    Scanner.scan_nearby(cfg, not has_work)
@@ -4000,10 +4024,10 @@ index 0000000..22c0e99
 +return Profile
 diff --git a/PalScouter/Scripts/scanner.lua b/PalScouter/Scripts/scanner.lua
 new file mode 100644
-index 0000000..554de12
+index 0000000..c6aa694
 --- /dev/null
 +++ b/PalScouter/Scripts/scanner.lua
-@@ -0,0 +1,924 @@
+@@ -0,0 +1,994 @@
 +-- PalScouter scanner.lua — native broadphase/snapshot consumer.
 +-- UObject discovery, distance checks and static Pal reads live in
 +-- PalScouterNative. Lua keeps only UI state, scoring and bounded enrichment.
@@ -4489,6 +4513,13 @@ index 0000000..554de12
 +
 +local function is_player_aiming(pawn)
 +    local shooter = Util.safe_call(nil, function() return pawn.ShooterComponent end)
++    if shooter == nil or not Util.valid(shooter) then
++        local controller = get_controller()
++        local player = G.local_player_character(controller)
++        if player ~= nil and player ~= pawn then
++            shooter = Util.safe_call(nil, function() return player.ShooterComponent end)
++        end
++    end
 +    if shooter == nil or not Util.valid(shooter) then return false end
 +    local aiming = Util.safe_call(nil, function() return shooter:IsAiming() end)
 +    if aiming == nil then aiming = Util.safe_call(false, function() return shooter:IsRequestAiming() end) end
@@ -4504,6 +4535,13 @@ index 0000000..554de12
 +
 +local function is_sphere_equipped(pawn)
 +    local shooter = Util.safe_call(nil, function() return pawn.ShooterComponent end)
++    if shooter == nil or not Util.valid(shooter) then
++        local controller = get_controller()
++        local player = G.local_player_character(controller)
++        if player ~= nil and player ~= pawn then
++            shooter = Util.safe_call(nil, function() return player.ShooterComponent end)
++        end
++    end
 +    if shooter == nil or not Util.valid(shooter) then return true end
 +    local weapon = Util.unwrap(Util.safe_call(nil, function() return shooter:GetHasWeapon() end))
 +    if weapon == nil or not Util.valid(weapon) then
@@ -4515,6 +4553,12 @@ index 0000000..554de12
 +
 +local function get_reticle_target(controller, pawn)
 +    local shooter = Util.safe_call(nil, function() return pawn.ShooterComponent end)
++    if shooter == nil or not Util.valid(shooter) then
++        local player = G.local_player_character(controller)
++        if player ~= nil and player ~= pawn then
++            shooter = Util.safe_call(nil, function() return player.ShooterComponent end)
++        end
++    end
 +    if shooter ~= nil and Util.valid(shooter) then
 +        local target = Util.unwrap(Util.safe_call(nil, function() return shooter.ReticleTargetActor end))
 +        if target == nil or not Util.valid(target) then
@@ -4678,29 +4722,53 @@ index 0000000..554de12
 +        local locked = Scanner.aim.data
 +        if locked ~= nil and locked.actor ~= nil and Util.valid(locked.actor)
 +            and Scanner.scout_allowed(locked.wild, cfg, locked.local_owned) then
-+            local pose_ok = native_pose(locked)
-+            local need_cone = Scanner.aim.cone_check_t == nil
-+                or now - Scanner.aim.cone_check_t >= CONE_RECHECK_SECONDS
-+            if need_cone then
-+                Scanner.aim.cone_check_t = now
-+                Scanner.aim.cone_ok = inside_aim_cone(controller, locked)
-+            end
-+            if Scanner.aim.cone_ok then
-+                if now - Scanner.aim.last_dynamic >= DYNAMIC_REFRESH_SECONDS then
-+                    local refresh_combat = now - Scanner.aim.last_combat >= COMBAT_REFRESH_SECONDS
-+                    if not pose_ok then
-+                        local parameter = G.get_parameter(locked.actor)
-+                        if parameter == nil then Scanner.clear_aim() return end
-+                        locked.hp, locked.max_hp = G.read_hp(parameter)
++            
++            -- Check if player is directly reticle-aiming at a DIFFERENT actor
++            local reticle = get_reticle_target(controller, pawn)
++            local reticle_switched = (reticle ~= nil and Util.valid(reticle) and Util.address(reticle) ~= Util.address(locked.actor))
++
++            if not reticle_switched then
++                local pose_ok = native_pose(locked)
++                local need_cone = Scanner.aim.cone_check_t == nil
++                    or now - Scanner.aim.cone_check_t >= CONE_RECHECK_SECONDS
++                if need_cone then
++                    Scanner.aim.cone_check_t = now
++                    Scanner.aim.cone_ok = inside_aim_cone(controller, locked)
++                end
++                if Scanner.aim.cone_ok then
++                    -- Check if another candidate is much closer to the center of reticle than locked
++                    local best_cone = find_cone_entry(controller, cfg)
++                    if best_cone ~= nil and best_cone.key ~= locked.key then
++                        local ax, ay, az = entry_location(locked)
++                        local bx, by, bz = entry_location(best_cone)
++                        local cx, cy, cz, fx, fy, fz = camera_basis(controller)
++                        if ax and bx and cx then
++                            local dot_locked = Scanner.aim_cone_dot(ax - cx, ay - cy, az - cz, fx, fy, fz)
++                            local dot_best = Scanner.aim_cone_dot(bx - cx, by - cy, bz - cz, fx, fy, fz)
++                            if dot_best > dot_locked + 0.04 then
++                                Scanner.clear_aim()
++                            end
++                        end
 +                    end
-+                    if refresh_combat and not refresh_card_combat(locked) then
-+                        Scanner.clear_aim()
++
++                    if Scanner.aim.data ~= nil then
++                        if now - Scanner.aim.last_dynamic >= DYNAMIC_REFRESH_SECONDS then
++                            local refresh_combat = now - Scanner.aim.last_combat >= COMBAT_REFRESH_SECONDS
++                            if not pose_ok then
++                                local parameter = G.get_parameter(locked.actor)
++                                if parameter == nil then Scanner.clear_aim() return end
++                                locked.hp, locked.max_hp = G.read_hp(parameter)
++                            end
++                            if refresh_combat and not refresh_card_combat(locked) then
++                                Scanner.clear_aim()
++                                return
++                            end
++                            Scanner.aim.last_dynamic = now
++                            if refresh_combat then Scanner.aim.last_combat = now end
++                        end
 +                        return
 +                    end
-+                    Scanner.aim.last_dynamic = now
-+                    if refresh_combat then Scanner.aim.last_combat = now end
 +                end
-+                return
 +            end
 +        end
 +        Scanner.clear_aim()
@@ -4756,6 +4824,7 @@ index 0000000..554de12
 +    Scanner.page, Scanner.pages = 1, 1
 +    Scanner.in_base = false
 +    Scanner._base = { last_probe = nil, needs_probe = true }
++    Scanner.last_scan_x, Scanner.last_scan_y, Scanner.last_scan_z = nil, nil, nil
 +    if reset_native and type(PalScouterNativeReset) == "function" then pcall(PalScouterNativeReset) end
 +end
 +
@@ -4820,6 +4889,31 @@ index 0000000..554de12
 +                Scanner.reset_nearby(true)
 +            end
 +            Scanner.last_world_address = world_addr
++        end
++
++        local player = G.local_player_character(controller) or get_pawn(controller)
++        if player ~= nil then
++            local loc = Util.safe_call(nil, function() return player:K2_GetActorLocation() end)
++            if loc ~= nil then
++                local px, py, pz = tonumber(loc.X), tonumber(loc.Y), tonumber(loc.Z)
++                if px ~= nil and py ~= nil and pz ~= nil then
++                    if Scanner.last_scan_x ~= nil then
++                        local dx, dy, dz = px - Scanner.last_scan_x, py - Scanner.last_scan_y, pz - Scanner.last_scan_z
++                        local dist_sq = dx * dx + dy * dy + dz * dz
++                        -- Force restart scan cycle if player moved more than 15 meters (1500 uu)
++                        if dist_sq > 1500 * 1500 then
++                            start_cycle = true
++                            n.stage_count = 0
++                            n.work_head = 1
++                            n.work_tail = 0
++                            n.native_more = false
++                        end
++                    end
++                    if start_cycle == true then
++                        Scanner.last_scan_x, Scanner.last_scan_y, Scanner.last_scan_z = px, py, pz
++                    end
++                end
++            end
 +        end
 +
 +        local pawn = get_pawn(controller)
@@ -7271,10 +7365,10 @@ index 0000000..9ce1c15
 +return List
 diff --git a/PalScouter/Scripts/ui_pal_picker.lua b/PalScouter/Scripts/ui_pal_picker.lua
 new file mode 100644
-index 0000000..6d69100
+index 0000000..d2948ce
 --- /dev/null
 +++ b/PalScouter/Scripts/ui_pal_picker.lua
-@@ -0,0 +1,487 @@
+@@ -0,0 +1,495 @@
 +-- PalScouter ui_pal_picker.lua — searchable nested SELECT PALS overlay.
 +local Util = require("util")
 +local UI = require("ui")
@@ -7528,24 +7622,32 @@ index 0000000..6d69100
 +    invalidate_summary()
 +end
 +
-+function Picker.setup(watchlist)
++function Picker.open(current_watchlist)
++    Picker.open_flag = true
 +    Picker.search = ""
 +    Picker.focus = 1
 +    Picker.scroll = 0
 +    Picker.footer_focus = 0
-+    Picker.working = copy_list(watchlist)
++    Picker.working = copy_list(Config.normalize_watchlist(current_watchlist))
 +    Picker.status = ""
-+    refilter()
 +    invalidate_summary()
++    Picker.ensure_catalog(nil)
++    refilter()
 +end
 +
-+function Picker.commit()
-+    return Picker.working
++function Picker.close_apply()
++    local label = Config.apply_watchlist(Picker.working)
++    label = Config.watchlist_label(Config.current, Picker._names)
++    Picker.open_flag = false
++    Picker.status = ""
++    Picker.footer_focus = 0
++    return label
 +end
 +
 +function Picker.discard()
-+    Picker.working = {}
-+    invalidate_summary()
++    Picker.open_flag = false
++    Picker.status = ""
++    Picker.footer_focus = 0
 +end
 +
 +function Picker.handle(dir)
@@ -7993,10 +8095,10 @@ index 0000000..bc3212a
 +return Settings
 diff --git a/PalScouter/Scripts/util.lua b/PalScouter/Scripts/util.lua
 new file mode 100644
-index 0000000..c8a665b
+index 0000000..e099e56
 --- /dev/null
 +++ b/PalScouter/Scripts/util.lua
-@@ -0,0 +1,159 @@
+@@ -0,0 +1,175 @@
 +-- PalScouter util.lua — hardened helpers
 +local Util = {}
 +
@@ -8139,7 +8241,21 @@ index 0000000..c8a665b
 +-- Clears the flag if the scheduler itself fails (otherwise the queue sticks forever).
 +-- `schedule` is injectable for tests; defaults to global ExecuteInGameThread.
 +function Util.run_queued_game_thread(state, flag, work, warn_label, schedule)
++    local now = os.clock()
++    local time_key = flag .. "_time"
++    if state[flag] == true and state[time_key] ~= nil then
++        if now - state[time_key] > 3.0 then
++            Util.log("WARNING: " .. tostring(flag) .. " queue lock timed out after 3s - unblocking queue")
++            state[flag] = false
++        end
++    end
++
++    if state[flag] == true then
++        return false
++    end
++
 +    state[flag] = true
++    state[time_key] = now
 +    local sched = schedule or ExecuteInGameThread
 +    local ok = pcall(sched, function()
 +        local wok, err = pcall(work)
@@ -8147,9 +8263,11 @@ index 0000000..c8a665b
 +            Util.log((warn_label or "game thread") .. " error: " .. tostring(err))
 +        end
 +        state[flag] = false
++        state[time_key] = nil
 +    end)
 +    if not ok then
 +        state[flag] = false
++        state[time_key] = nil
 +        Util.log("WARNING: " .. (warn_label or "ExecuteInGameThread") .. " failed")
 +    end
 +    return ok

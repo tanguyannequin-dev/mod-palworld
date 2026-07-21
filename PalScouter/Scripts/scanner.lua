@@ -483,6 +483,13 @@ function Scanner.forget_actor(_) return false end
 
 local function is_player_aiming(pawn)
     local shooter = Util.safe_call(nil, function() return pawn.ShooterComponent end)
+    if shooter == nil or not Util.valid(shooter) then
+        local controller = get_controller()
+        local player = G.local_player_character(controller)
+        if player ~= nil and player ~= pawn then
+            shooter = Util.safe_call(nil, function() return player.ShooterComponent end)
+        end
+    end
     if shooter == nil or not Util.valid(shooter) then return false end
     local aiming = Util.safe_call(nil, function() return shooter:IsAiming() end)
     if aiming == nil then aiming = Util.safe_call(false, function() return shooter:IsRequestAiming() end) end
@@ -498,6 +505,13 @@ end
 
 local function is_sphere_equipped(pawn)
     local shooter = Util.safe_call(nil, function() return pawn.ShooterComponent end)
+    if shooter == nil or not Util.valid(shooter) then
+        local controller = get_controller()
+        local player = G.local_player_character(controller)
+        if player ~= nil and player ~= pawn then
+            shooter = Util.safe_call(nil, function() return player.ShooterComponent end)
+        end
+    end
     if shooter == nil or not Util.valid(shooter) then return true end
     local weapon = Util.unwrap(Util.safe_call(nil, function() return shooter:GetHasWeapon() end))
     if weapon == nil or not Util.valid(weapon) then
@@ -509,6 +523,12 @@ end
 
 local function get_reticle_target(controller, pawn)
     local shooter = Util.safe_call(nil, function() return pawn.ShooterComponent end)
+    if shooter == nil or not Util.valid(shooter) then
+        local player = G.local_player_character(controller)
+        if player ~= nil and player ~= pawn then
+            shooter = Util.safe_call(nil, function() return player.ShooterComponent end)
+        end
+    end
     if shooter ~= nil and Util.valid(shooter) then
         local target = Util.unwrap(Util.safe_call(nil, function() return shooter.ReticleTargetActor end))
         if target == nil or not Util.valid(target) then
@@ -672,29 +692,53 @@ function Scanner.scan_aim(cfg)
         local locked = Scanner.aim.data
         if locked ~= nil and locked.actor ~= nil and Util.valid(locked.actor)
             and Scanner.scout_allowed(locked.wild, cfg, locked.local_owned) then
-            local pose_ok = native_pose(locked)
-            local need_cone = Scanner.aim.cone_check_t == nil
-                or now - Scanner.aim.cone_check_t >= CONE_RECHECK_SECONDS
-            if need_cone then
-                Scanner.aim.cone_check_t = now
-                Scanner.aim.cone_ok = inside_aim_cone(controller, locked)
-            end
-            if Scanner.aim.cone_ok then
-                if now - Scanner.aim.last_dynamic >= DYNAMIC_REFRESH_SECONDS then
-                    local refresh_combat = now - Scanner.aim.last_combat >= COMBAT_REFRESH_SECONDS
-                    if not pose_ok then
-                        local parameter = G.get_parameter(locked.actor)
-                        if parameter == nil then Scanner.clear_aim() return end
-                        locked.hp, locked.max_hp = G.read_hp(parameter)
+            
+            -- Check if player is directly reticle-aiming at a DIFFERENT actor
+            local reticle = get_reticle_target(controller, pawn)
+            local reticle_switched = (reticle ~= nil and Util.valid(reticle) and Util.address(reticle) ~= Util.address(locked.actor))
+
+            if not reticle_switched then
+                local pose_ok = native_pose(locked)
+                local need_cone = Scanner.aim.cone_check_t == nil
+                    or now - Scanner.aim.cone_check_t >= CONE_RECHECK_SECONDS
+                if need_cone then
+                    Scanner.aim.cone_check_t = now
+                    Scanner.aim.cone_ok = inside_aim_cone(controller, locked)
+                end
+                if Scanner.aim.cone_ok then
+                    -- Check if another candidate is much closer to the center of reticle than locked
+                    local best_cone = find_cone_entry(controller, cfg)
+                    if best_cone ~= nil and best_cone.key ~= locked.key then
+                        local ax, ay, az = entry_location(locked)
+                        local bx, by, bz = entry_location(best_cone)
+                        local cx, cy, cz, fx, fy, fz = camera_basis(controller)
+                        if ax and bx and cx then
+                            local dot_locked = Scanner.aim_cone_dot(ax - cx, ay - cy, az - cz, fx, fy, fz)
+                            local dot_best = Scanner.aim_cone_dot(bx - cx, by - cy, bz - cz, fx, fy, fz)
+                            if dot_best > dot_locked + 0.04 then
+                                Scanner.clear_aim()
+                            end
+                        end
                     end
-                    if refresh_combat and not refresh_card_combat(locked) then
-                        Scanner.clear_aim()
+
+                    if Scanner.aim.data ~= nil then
+                        if now - Scanner.aim.last_dynamic >= DYNAMIC_REFRESH_SECONDS then
+                            local refresh_combat = now - Scanner.aim.last_combat >= COMBAT_REFRESH_SECONDS
+                            if not pose_ok then
+                                local parameter = G.get_parameter(locked.actor)
+                                if parameter == nil then Scanner.clear_aim() return end
+                                locked.hp, locked.max_hp = G.read_hp(parameter)
+                            end
+                            if refresh_combat and not refresh_card_combat(locked) then
+                                Scanner.clear_aim()
+                                return
+                            end
+                            Scanner.aim.last_dynamic = now
+                            if refresh_combat then Scanner.aim.last_combat = now end
+                        end
                         return
                     end
-                    Scanner.aim.last_dynamic = now
-                    if refresh_combat then Scanner.aim.last_combat = now end
                 end
-                return
             end
         end
         Scanner.clear_aim()
@@ -750,6 +794,7 @@ function Scanner.reset_nearby(reset_native)
     Scanner.page, Scanner.pages = 1, 1
     Scanner.in_base = false
     Scanner._base = { last_probe = nil, needs_probe = true }
+    Scanner.last_scan_x, Scanner.last_scan_y, Scanner.last_scan_z = nil, nil, nil
     if reset_native and type(PalScouterNativeReset) == "function" then pcall(PalScouterNativeReset) end
 end
 
@@ -814,6 +859,31 @@ function Scanner.scan_nearby(cfg, start_cycle)
                 Scanner.reset_nearby(true)
             end
             Scanner.last_world_address = world_addr
+        end
+
+        local player = G.local_player_character(controller) or get_pawn(controller)
+        if player ~= nil then
+            local loc = Util.safe_call(nil, function() return player:K2_GetActorLocation() end)
+            if loc ~= nil then
+                local px, py, pz = tonumber(loc.X), tonumber(loc.Y), tonumber(loc.Z)
+                if px ~= nil and py ~= nil and pz ~= nil then
+                    if Scanner.last_scan_x ~= nil then
+                        local dx, dy, dz = px - Scanner.last_scan_x, py - Scanner.last_scan_y, pz - Scanner.last_scan_z
+                        local dist_sq = dx * dx + dy * dy + dz * dz
+                        -- Force restart scan cycle if player moved more than 15 meters (1500 uu)
+                        if dist_sq > 1500 * 1500 then
+                            start_cycle = true
+                            n.stage_count = 0
+                            n.work_head = 1
+                            n.work_tail = 0
+                            n.native_more = false
+                        end
+                    end
+                    if start_cycle == true then
+                        Scanner.last_scan_x, Scanner.last_scan_y, Scanner.last_scan_z = px, py, pz
+                    end
+                end
+            end
         end
 
         local pawn = get_pawn(controller)

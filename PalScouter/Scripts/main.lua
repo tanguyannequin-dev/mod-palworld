@@ -256,8 +256,30 @@ local function draw_hud(context)
     end
 end
 
+local function check_schedulers_heartbeat()
+    if not cfg.Enabled then return end
+    local now = os.clock()
+    if (cfg.AimCard.ShowMode or "always") ~= "off" and not aim_scan_paused_for_modal() then
+        if State.last_aim_tick == nil or (now - State.last_aim_tick > 5.0) then
+            State.aim_queued = false
+            State.last_aim_tick = now
+            pcall(schedule_aim)
+        end
+    end
+    if Scanner.nearby.active and not nearby_scan_paused_for_modal() then
+        if State.last_nearby_tick == nil or (now - State.last_nearby_tick > 5.0) then
+            State.nearby_queued = false
+            State.last_nearby_tick = now
+            pcall(schedule_nearby)
+        end
+    end
+end
+
 local function on_draw_hud(context)
     State.frame = State.frame + 1
+    if State.frame % 60 == 0 then
+        pcall(check_schedulers_heartbeat)
+    end
     pcall(Profile.span, "hud.draw", draw_hud, context)
 end
 
@@ -316,6 +338,7 @@ schedule_aim = function()
         if cfg.Enabled and (cfg.AimCard.ShowMode or "always") ~= "off"
             and not aim_scan_paused_for_modal() and not State.aim_queued then
             Util.run_queued_game_thread(State, "aim_queued", function()
+                State.last_aim_tick = os.clock()
                 -- Recheck at execution time: user may have switched to OFF
                 -- or opened a modal while this callback sat in the queue.
                 if not cfg.Enabled or aim_scan_paused_for_modal()
@@ -366,6 +389,7 @@ schedule_nearby = function()
                 return
             end
             local queued = Util.run_queued_game_thread(State, "nearby_queued", function()
+                State.last_nearby_tick = os.clock()
                 if gen == nearby_loop_gen and Scanner.nearby.active
                     and not nearby_scan_paused_for_modal() then
                     Scanner.scan_nearby(cfg, not has_work)

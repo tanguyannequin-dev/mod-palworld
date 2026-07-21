@@ -140,7 +140,21 @@ end
 -- Clears the flag if the scheduler itself fails (otherwise the queue sticks forever).
 -- `schedule` is injectable for tests; defaults to global ExecuteInGameThread.
 function Util.run_queued_game_thread(state, flag, work, warn_label, schedule)
+    local now = os.clock()
+    local time_key = flag .. "_time"
+    if state[flag] == true and state[time_key] ~= nil then
+        if now - state[time_key] > 3.0 then
+            Util.log("WARNING: " .. tostring(flag) .. " queue lock timed out after 3s - unblocking queue")
+            state[flag] = false
+        end
+    end
+
+    if state[flag] == true then
+        return false
+    end
+
     state[flag] = true
+    state[time_key] = now
     local sched = schedule or ExecuteInGameThread
     local ok = pcall(sched, function()
         local wok, err = pcall(work)
@@ -148,9 +162,11 @@ function Util.run_queued_game_thread(state, flag, work, warn_label, schedule)
             Util.log((warn_label or "game thread") .. " error: " .. tostring(err))
         end
         state[flag] = false
+        state[time_key] = nil
     end)
     if not ok then
         state[flag] = false
+        state[time_key] = nil
         Util.log("WARNING: " .. (warn_label or "ExecuteInGameThread") .. " failed")
     end
     return ok
