@@ -1,0 +1,70 @@
+-- PalScouter user settings (auto-generated; safe to edit while the game is closed)
+return {
+    AimCard = {
+        AcquireMs = 1000,
+        BackgroundOpacity = 0.9,
+        OffsetX = -500,
+        OffsetY = 24,
+        Scale = 1.0,
+        ShowMode = "always",
+    },
+    Base = {
+        HideUiInBase = false,
+    },
+    Enabled = true,
+    Filter = {
+        HideIfNegativePassive = false,
+        MinScore = 0,
+        MinSingleIV = 0,
+        Ownership = "wild",
+        Preset = "Off",
+        RequirePositivePassive = false,
+        ShowUnknownOwnership = false,
+        Species = "",
+        Watchlist = {
+        },
+    },
+    Keys = {
+        CycleSort = "F6",
+        NextPage = "SHIFT+F7",
+        ToggleCard = "SHIFT+F8",
+        TogglePanel = "F8",
+        ToggleSettings = "F7",
+    },
+    Language = "fr",
+    LayoutVersion = 6,
+    Panel = {
+        BackgroundOpacity = 0.5,
+        MaxRows = 10,
+        OffsetX = 50,
+        OffsetY = 460,
+        Scale = 0.6,
+    },
+    Scan = {
+        EvictAfterMisses = 2,
+        IntervalMs = 1000,
+        MaxNewPerTick = 4,
+        RadiusMeters = 1000,
+    },
+    Score = {
+        Grades = {
+            A = 70,
+            B = 55,
+            C = 40,
+            S = 85,
+        },
+        IVWeight = 0.6,
+        Mode = "work",
+        PassiveBaseline = 20,
+        PassivePoints = {
+            R1 = 5,
+            R2 = 9,
+            R3 = 14,
+            R4 = 18,
+        },
+        WeightAttack = 0.5,
+        WeightDefense = 0.25,
+        WeightHP = 0.25,
+    },
+    Sort = "distance",
+}
