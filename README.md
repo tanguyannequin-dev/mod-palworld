@@ -18,6 +18,10 @@ These modifications address long-standing limitations noted by the original mod 
 | **UI Alignment & Font Scaling** | Solved Spanish/French text overlaps by calculating game capital letter font width (13.5px instead of 8px). Expanded settings width to 600px and added dynamic value centering between `<` and `>`. | [ui_settings.lua](PalScouter/Scripts/ui_settings.lua), [ui_pal_picker.lua](PalScouter/Scripts/ui_pal_picker.lua) |
 | **Conflict-Free Keyboard Controls** | Replaced camera-locking UIOnly mouse mode with PlayerController `DisableInput`/`EnableInput`. Remapped `Space` to toggle watchlist items without text filter conflicts, and `Backspace`/`F7` to close. | [main.lua](PalScouter/Scripts/main.lua), [ui_pal_picker.lua](PalScouter/Scripts/ui_pal_picker.lua) |
 | **Dungeon & Level Load Safety** | Bound state cleanup to `RegisterLoadMapPreHook` and added `actor:IsValid()` checks across all polling hooks to prevent crashes during level streaming or fast travel. | [main.lua](PalScouter/Scripts/main.lua), [scanner.lua](PalScouter/Scripts/scanner.lua) |
+| **Complete C++ Crash Protection (Sync Polling)** | Disabled the native C++ 'batching' system that held raw memory pointers across ticks. This fixes the fatal `0xffffffffffffffff` UE4SS freeze that occurred when a Pal disappeared or died mid-batch. | [scanner.lua](PalScouter/Scripts/scanner.lua) |
+| **Teleportation & Fast Travel Safety** | Added a 100-meter distance jump detection. Automatically purges all C++ references and pauses the scan for 1.5 seconds during fast travel, allowing UE4 to safely garbage collect old actors without crashing. | [scanner.lua](PalScouter/Scripts/scanner.lua) |
+| **Alt-Tab / Resolution Crash Fix** | Added an explicit validity check on `hud.Canvas`. Fixes the `0x18` Access Violation that crashed the game entirely when Alt-Tabbing or resizing the window on the title screen. | [main.lua](PalScouter/Scripts/main.lua) |
+| **Manual Hard Reboot** | Added a "FORCE RESTART" option in the F7 settings menu to let players manually flush the mod's memory queues without restarting the game. | [main.lua](PalScouter/Scripts/main.lua), [ui_settings.lua](PalScouter/Scripts/ui_settings.lua) |
 
 ---
 
@@ -40,13 +44,19 @@ These modifications address long-standing limitations noted by the original mod 
   * **Queue Lock Watchdog (`util.lua`):** `Util.run_queued_game_thread` tracks queue entry timestamps. If a lock remains active for > 3.0s, it automatically unblocks the queue.
   * **Heartbeat Watchdog (`main.lua`):** Inside `on_draw_hud` (which runs every frame), the mod checks scheduler timestamps every 60 frames (~1s). If `schedule_nearby` or `schedule_aim` haven't ticked for > 5.0s, it automatically restarts them seamlessly.
 
-### 4. Dynamic Radar Refresh on Travel (`scanner.lua`)
-* **Problem:** When flying fast across the map, `refine_nearby` could get stuck processing stale candidates from a previous area, preventing `native_poll` from running a fresh scan for the new position.
-* **Solution:** `scan_nearby` now tracks the player's 3D coordinates. Moving more than 15 meters (`dist_sq > 1500 * 1500`) automatically clears stale refinement queues and triggers an instant native scan for the new location.
+### 4. Complete C++ Crash Prevention & Teleport Safety (`scanner.lua`)
+* **Problem 1 (Base Freezes):** The C++ DLL used a batching system (`PalScouterNativePollBatch`) that held raw `AActor*` pointers in memory across multiple 200ms ticks. If a Pal was returned to the Palbox or died mid-batch, accessing the dangling pointer caused a fatal `0xffffffffffffffff` Access Violation, permanently killing the UE4SS game thread.
+* **Solution 1:** Bypassed the batching system entirely by exclusively invoking the synchronous `PalScouterNativePoll`. The scan now executes safely in a single frame, eliminating all dangling pointer crashes without noticeable FPS drops.
+* **Problem 2 (Teleport Freezes):** When fast traveling, UE4 destroys massive amounts of actors. The physics octree briefly returns `PendingKill` actors, which crashed the C++ bridge if scanned immediately. The old 15m distance check was also aggressively triggering mid-batch resets (`batch_restart = true`), further corrupting C++ memory.
+* **Solution 2:** Removed the aggressive 15m reset. Replaced it with a 100-meter teleport detection that instantly flushes Lua caches and enforces a strict **1.5-second scan pause**, allowing the UE4 engine to stabilize garbage collection safely.
 
-### 5. Localization & Font Geometry (`localization.lua`, `ui_settings.lua`)
+### 5. Alt-Tab HUD Crash Fix (`main.lua`)
+* **Problem:** Alt-Tabbing or changing resolution caused `EXCEPTION_ACCESS_VIOLATION reading address 0x18`. During screen resize, the D3D device resets and `hud.Canvas` briefly becomes a dead pointer, crashing UE4SS when the mod tried to read its `SizeX` property.
+* **Solution:** Introduced `Util.valid(canvas)` before property access. The mod now gracefully skips drawing entirely while the window is being resized or Alt-Tabbed.
+
+### 6. Localization & Font Geometry (`localization.lua`, `ui_settings.lua`)
 * **Problem:** Default 8px font width calculations caused long French/Spanish option names (e.g. `"SAUVAGES SEULS"`, `"LISTA DE SEGUIM."`) to overlap with `<` and `>` chevron buttons.
-* **Solution:** Created a standalone translation dictionary `localization.lua`. Corrected font character width to **13.5px** (matching in-game capital letter rendering), expanded setting panel width to **600px**, and centered option text dynamically within a 200px bounding box.
+* **Solution:** Created a standalone translation dictionary `localization.lua`. Corrected font character width to **13.5px** (matching in-game capital letter rendering), expanded setting panel width to **600px**, and centered option text dynamically within a 200px bounding box. Added a manual "FORCE RESTART" button for emergency memory flushes.
 
 ---
 

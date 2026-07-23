@@ -81,12 +81,40 @@ local function get_pawn(controller)
     end)
 end
 
+local function get_player_pawn(controller)
+    return get_pawn(controller)
+end
+
 function Scanner.reset_player_cache()
     player_cache.controller, player_cache.pawn = nil, nil
 end
 
 function Scanner.player_controller()
     return get_controller()
+end
+
+function Scanner.is_pal_character(actor)
+    if actor == nil or not Util.valid(actor) then return false end
+    local full_name = Util.full_name(actor)
+    if full_name == nil then return true end
+    local lower = full_name:lower()
+    if lower:find("dropitem", 1, true) or lower:find("worldobject", 1, true) then return false end
+    return true
+end
+
+-- Verify an actor's internal state is still intact before sending it to C++.
+-- During capture/despawn, the UObject stays "valid" in UE4SS's registry for
+-- a few frames while its internal component pointers are already nullified.
+-- Calling native C++ on such a zombie actor corrupts UE4SS's game-thread
+-- dispatcher, permanently freezing both the aim card and the nearby scanner.
+local function actor_alive(actor)
+    if actor == nil or not Util.valid(actor) then return false end
+    -- CharacterParameterComponent is the first field C++ reads; if it is gone
+    -- the actor is mid-destruction and must not be sent to native code.
+    local comp = Util.safe_call(nil, function() return actor:GetCharacterParameterComponent() end)
+    if comp ~= nil and Util.valid(comp) then return true end
+    comp = Util.safe_call(nil, function() return actor.CharacterParameterComponent end)
+    return comp ~= nil and Util.valid(comp)
 end
 
 function Scanner.scout_allowed(verdict, cfg, local_owned)
@@ -378,6 +406,8 @@ end
 
 local function native_track(pawn, actor, radius_meters, cfg)
     if type(PalScouterNativeTrack) ~= "function" then return nil end
+    if pawn == nil or not Util.valid(pawn) then return nil end
+    if actor == nil or not actor_alive(actor) or not Scanner.is_pal_character(actor) then return nil end
     local ok, row = Profile.span("bridge.track", pcall,
         PalScouterNativeTrack, pawn, actor, radius_meters)
     if not ok or type(row) ~= "table" or row.native_error ~= nil then return nil end
@@ -402,7 +432,7 @@ end
 
 local function native_pose(entry)
     if entry == nil or entry.actor == nil or type(PalScouterNativePose) ~= "function" then return false end
-    if not Util.valid(entry.actor) then return false end
+    if not actor_alive(entry.actor) or not Scanner.is_pal_character(entry.actor) then return false end
     local ok, row = Profile.span("bridge.pose", pcall, PalScouterNativePose, entry.actor)
     if not ok or type(row) ~= "table" then return false end
     local x, y, z = tonumber(row.x), tonumber(row.y), tonumber(row.z)
@@ -534,10 +564,10 @@ local function get_reticle_target(controller, pawn)
         if target == nil or not Util.valid(target) then
             target = Util.unwrap(Util.safe_call(nil, function() return shooter:GetReticleTargetActor() end))
         end
-        if target ~= nil and Util.valid(target) then return target end
+        if target ~= nil and Util.valid(target) and Scanner.is_pal_character(target) then return target end
     end
     local target = Util.unwrap(Util.safe_call(nil, function() return controller.AutoAimTarget end))
-    if target ~= nil and Util.valid(target) then return target end
+    if target ~= nil and Util.valid(target) and Scanner.is_pal_character(target) then return target end
     return nil
 end
 
@@ -627,7 +657,12 @@ local function enrich_card(controller, entry, cfg)
     end
     entry.active_skills = G.read_active_skills(controller, parameter)
     entry.anchor = Util.safe_call(120, function()
-        return entry.actor.CapsuleComponent:GetScaledCapsuleHalfHeight() + 12
+        local caps = Util.unwrap(Util.safe_call(nil, function() return entry.actor.CapsuleComponent end))
+        if caps ~= nil and Util.valid(caps) then
+            local h = Util.safe_call(nil, function() return caps:GetScaledCapsuleHalfHeight() end)
+            if h ~= nil then return tonumber(h) + 12 end
+        end
+        return 120
     end)
     finish_scores(entry, cfg)
     return true
@@ -677,8 +712,8 @@ function Scanner.scan_aim(cfg)
             end
             Scanner.last_world_address = world_addr
         end
-        local pawn = get_pawn(controller)
-        if pawn == nil or not is_player_aiming(pawn) then Scanner.clear_aim() return end
+        local pawn = get_player_pawn(controller)
+        if pawn == nil or not actor_alive(pawn) or not is_player_aiming(pawn) then Scanner.clear_aim() return end
         if (cfg.AimCard.ShowMode or "always") == "sphere" and not is_sphere_equipped(pawn) then
             Scanner.clear_aim()
             return
@@ -690,7 +725,7 @@ function Scanner.scan_aim(cfg)
         -- Locked fast path: retain the actor directly.  Do not call NativeTrack,
         -- rebuild its static snapshot or allocate a full Lua row every locked tick.
         local locked = Scanner.aim.data
-        if locked ~= nil and locked.actor ~= nil and Util.valid(locked.actor)
+        if locked ~= nil and locked.actor ~= nil and actor_alive(locked.actor)
             and Scanner.scout_allowed(locked.wild, cfg, locked.local_owned) then
             
             -- Check if player is directly reticle-aiming at a DIFFERENT actor
@@ -745,13 +780,18 @@ function Scanner.scan_aim(cfg)
 
         local target
         local reticle = get_reticle_target(controller, pawn)
+        local reticle_is_own_pal = false
         if reticle ~= nil then
             local direct = native_track(pawn, reticle, radius, cfg)
-            if direct ~= nil and Scanner.scout_allowed(direct.wild, cfg, direct.local_owned) then
-                target = direct
+            if direct ~= nil then
+                if Scanner.scout_allowed(direct.wild, cfg, direct.local_owned) then
+                    target = direct
+                else
+                    reticle_is_own_pal = true
+                end
             end
         end
-        if target == nil then
+        if target == nil and not reticle_is_own_pal then
             target = find_cone_entry(controller, cfg)
             if target == nil then
                 if not native_poll(controller, pawn, radius, cfg) then return end
@@ -829,7 +869,7 @@ function Scanner.refresh_base_presence(cfg)
     b.needs_probe, b.last_probe = false, now
     local controller = get_controller()
     if controller == nil then Scanner.in_base = false return false end
-    local player = G.local_player_character(controller) or get_pawn(controller)
+    local player = get_player_pawn(controller)
     local loc = player and Util.safe_call(nil, function() return player:K2_GetActorLocation() end)
     local x, y, z = loc and tonumber(loc.X), loc and tonumber(loc.Y), loc and tonumber(loc.Z)
     Scanner.in_base = G.player_inside_base_camp(controller, x, y, z) == true
@@ -847,6 +887,11 @@ function Scanner.scan_nearby(cfg, start_cycle)
     return Profile.span("scan.nearby.native", function()
         local n = Scanner.nearby
         if not n.active then return end
+        local now = os.clock()
+        if Scanner.teleport_cooldown ~= nil and now < Scanner.teleport_cooldown then
+            return
+        end
+
         local controller = get_controller()
         if controller == nil then return end
 
@@ -857,11 +902,13 @@ function Scanner.scan_nearby(cfg, start_cycle)
             if Scanner.last_world_address ~= nil and Scanner.last_world_address ~= world_addr then
                 Util.log("INFO: World changed from " .. tostring(Scanner.last_world_address) .. " to " .. tostring(world_addr) .. " - resetting native registry")
                 Scanner.reset_nearby(true)
+                Scanner.teleport_cooldown = now + 1.5
+                return
             end
             Scanner.last_world_address = world_addr
         end
 
-        local player = G.local_player_character(controller) or get_pawn(controller)
+        local player = get_player_pawn(controller)
         if player ~= nil then
             local loc = Util.safe_call(nil, function() return player:K2_GetActorLocation() end)
             if loc ~= nil then
@@ -870,13 +917,13 @@ function Scanner.scan_nearby(cfg, start_cycle)
                     if Scanner.last_scan_x ~= nil then
                         local dx, dy, dz = px - Scanner.last_scan_x, py - Scanner.last_scan_y, pz - Scanner.last_scan_z
                         local dist_sq = dx * dx + dy * dy + dz * dz
-                        -- Force restart scan cycle if player moved more than 15 meters (1500 uu)
-                        if dist_sq > 1500 * 1500 then
-                            start_cycle = true
-                            n.stage_count = 0
-                            n.work_head = 1
-                            n.work_tail = 0
-                            n.native_more = false
+                        -- Si le joueur a bougé de plus de 100 mètres (10000 uu), c'est une téléportation
+                        if dist_sq > 10000 * 10000 then
+                            Scanner.reset_nearby(true)
+                            Scanner.last_scan_x, Scanner.last_scan_y, Scanner.last_scan_z = px, py, pz
+                            Scanner.teleport_cooldown = now + 1.5
+                            Util.log("INFO: Teleportation detected. Pausing scan for 1.5s.")
+                            return
                         end
                     end
                     if start_cycle == true then
@@ -886,22 +933,20 @@ function Scanner.scan_nearby(cfg, start_cycle)
             end
         end
 
-        local pawn = get_pawn(controller)
-        if pawn == nil then return end
+        local pawn = get_player_pawn(controller)
+        if pawn == nil or not actor_alive(pawn) then return end
         local changed = false
         local polled = false
         if start_cycle == true then
             polled = true
-            changed = native_poll(controller, pawn, cfg.Scan.RadiusMeters or 100, cfg, true)
-        elseif n.native_more == true then
-            polled = true
-            changed = native_poll(controller, pawn, cfg.Scan.RadiusMeters or 100, cfg, false)
+            changed = native_poll(controller, pawn, cfg.Scan.RadiusMeters or 100, cfg)
+            n.native_more = false -- Reset just in case
         else
             changed = refine_nearby(controller, cfg)
         end
-        -- If the native batch completed on this tick, publish the first fully
+        -- If the native poll completed on this tick, publish the first fully
         -- localized rows immediately instead of waiting another 200 ms.
-        if polled and n.native_more ~= true and (n.stage_count or 0) > 0 then
+        if polled and (n.stage_count or 0) > 0 then
             changed = refine_nearby(controller, cfg) or changed
         end
         if changed then Profile.span("scan.nearby.rebuild", Scanner.rebuild_view, cfg) end

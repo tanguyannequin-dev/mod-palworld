@@ -50,6 +50,7 @@ L.dict = {
         opt_panelopacity = "PANEL OPACITY",
         opt_movepanel = "MOVE PANEL",
         opt_hideinbase = "HIDE IN BASE",
+        opt_reboot = "FORCE RESTART",
         
         val_en = "ENGLISH",
         val_fr = "FRENCH",
@@ -74,6 +75,7 @@ L.dict = {
         val_focus = "FOCUS",
         val_on = "ON",
         val_off = "OFF",
+        val_execute = "EXECUTE",
         
         help_settings = "UP/DOWN: SELECT   LEFT/RIGHT: CYCLE   SPACE: ACTIVATE   BACKSPACE/F7: CLOSE",
         
@@ -154,6 +156,7 @@ L.dict = {
         opt_panelopacity = "OPACITÉ PANEL",
         opt_movepanel = "BOUGER PANEL",
         opt_hideinbase = "CACHER EN BASE",
+        opt_reboot = "FORCER REDEMARRAGE",
         
         val_en = "ANGLAIS",
         val_fr = "FRANÇAIS",
@@ -178,6 +181,7 @@ L.dict = {
         val_focus = "FOCUS",
         val_on = "ACTIF",
         val_off = "INACTIF",
+        val_execute = "EXECUTER",
         
         help_settings = "HAUT/BAS: SELECT.   GAUCHE/DROITE: CHANGER   ESPACE: ACTIVER   RETOUR/F7: FERMER",
         

@@ -172,6 +172,15 @@ local function apply_settings_action(action)
         value = Config.hide_in_base_label(Config.cycle_hide_in_base(delta))
         Scanner._base.needs_probe = true
         if not cfg.Base.HideUiInBase then Scanner.in_base = false end
+    elseif id == "reboot" then
+        Scanner.reset_nearby(true)
+        Scanner.clear_aim()
+        State.last_nearby_tick = nil
+        State.last_aim_tick = nil
+        State.nearby_queued = false
+        State.aim_queued = false
+        Util.log("Mod force-rebooted / Mod redemarre")
+        return
     end
     if value ~= nil then
         Util.log(string.format("Settings %s = %s", id, tostring(value)))
@@ -205,19 +214,16 @@ end
 
 local function canvas_size(hud)
     local canvas = hud.Canvas
-    if canvas == nil then return nil, nil end
+    if canvas == nil or not Util.valid(canvas) then return nil, nil end
     return tonumber(canvas.SizeX), tonumber(canvas.SizeY)
 end
 
 local function draw_hud(context)
     local hud = context:get()
     if hud == nil or not Util.valid(hud) then return end
-    local sw, sh = 1920, 1080
     local size_ok, canvas_w, canvas_h = pcall(canvas_size, hud)
-    if size_ok then
-        sw = canvas_w or sw
-        sh = canvas_h or sh
-    end
+    if not size_ok or canvas_w == nil or canvas_h == nil then return end
+    local sw, sh = canvas_w, canvas_h
     if State.frame % 30 == 1 then Scanner.refresh_base_presence(cfg) end
     local hide_for_base = cfg.Base and cfg.Base.HideUiInBase and Scanner.in_base
         and not State.settings_open and not State.pal_picker_open
@@ -276,6 +282,7 @@ local function check_schedulers_heartbeat()
 end
 
 local function on_draw_hud(context)
+    if not cfg.Enabled or not ui_visible() then return end
     State.frame = State.frame + 1
     if State.frame % 60 == 0 then
         pcall(check_schedulers_heartbeat)
@@ -293,27 +300,13 @@ register_hud_hook = function()
         Util.dbg("HUD hook registered")
     else
         pcall(ExecuteWithDelay, 1000, function()
-            if ui_visible() and State.hook_ids == nil then register_hud_hook() end
+            if State.hook_ids == nil then register_hud_hook() end
         end)
     end
 end
 
-local function unregister_hud_hook_deferred()
-    State.unhook_generation = State.unhook_generation + 1
-    local gen = State.unhook_generation
-    pcall(ExecuteWithDelay, 1200, function()
-        if gen ~= State.unhook_generation then return end
-        if ui_visible() then return end
-        if State.hook_ids ~= nil then
-            pcall(UnregisterHook, HUD_HOOK_PATH, State.hook_ids[1], State.hook_ids[2])
-            State.hook_ids = nil
-            Util.dbg("HUD hook unregistered")
-        end
-    end)
-end
-
 sync_hook = function()
-    if ui_visible() then register_hud_hook() else unregister_hud_hook_deferred() end
+    register_hud_hook()
 end
 
 -- ------------------------------------------------------------ schedulers

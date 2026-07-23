@@ -1,4 +1,4 @@
-From 6bd27dfa042d482758ac28f57b78dfb5540cabdd Mon Sep 17 00:00:00 2001
+From 0f95905583b63dd35fe336a3c0736bf0568a7289 Mon Sep 17 00:00:00 2001
 From: contact71 <contact@etabli-digital.com>
 Date: Tue, 21 Jul 2026 16:24:46 +0200
 Subject: [PATCH] Introduce PalScouter localization, keyboard navigation
@@ -9,24 +9,24 @@ Subject: [PATCH] Introduce PalScouter localization, keyboard navigation
  PalScouter/Scripts/config.lua         |  681 +++++++++++
  PalScouter/Scripts/direction.lua      |   41 +
  PalScouter/Scripts/gamedata.lua       |  744 ++++++++++++
- PalScouter/Scripts/localization.lua   |  535 ++++++++
- PalScouter/Scripts/main.lua           |  947 +++++++++++++++
+ PalScouter/Scripts/localization.lua   |  539 ++++++++
+ PalScouter/Scripts/main.lua           |  940 ++++++++++++++
  PalScouter/Scripts/pal_icon_names.lua |  420 +++++++
  PalScouter/Scripts/passive_ranks.lua  |  250 ++++
  PalScouter/Scripts/passive_tags.lua   |   72 ++
  PalScouter/Scripts/profile.lua        |  154 +++
- PalScouter/Scripts/scanner.lua        |  994 +++++++++++++++
+ PalScouter/Scripts/scanner.lua        | 1039 ++++++++++++++++
  PalScouter/Scripts/score.lua          |  270 +++++
  PalScouter/Scripts/ui.lua             | 1620 +++++++++++++++++++++++++
  PalScouter/Scripts/ui_card.lua        |  266 ++++
  PalScouter/Scripts/ui_list.lua        |  161 +++
  PalScouter/Scripts/ui_pal_picker.lua  |  495 ++++++++
- PalScouter/Scripts/ui_settings.lua    |  223 ++++
+ PalScouter/Scripts/ui_settings.lua    |  225 ++++
  PalScouter/Scripts/util.lua           |  175 +++
  PalScouter/Scripts/waza_ids.lua       |  396 ++++++
  PalScouter/dlls/main.dll              |  Bin 0 -> 517632 bytes
- README.md                             |   58 +-
- 21 files changed, 8571 insertions(+), 1 deletion(-)
+ README.md                             |   69 +-
+ 21 files changed, 8626 insertions(+), 1 deletion(-)
  create mode 100644 PalScouter/PalScouter.userconfig.lua
  create mode 100644 PalScouter/Scripts/config.lua
  create mode 100644 PalScouter/Scripts/direction.lua
@@ -1610,10 +1610,10 @@ index 0000000..0614825
 +return G
 diff --git a/PalScouter/Scripts/localization.lua b/PalScouter/Scripts/localization.lua
 new file mode 100644
-index 0000000..d4d518f
+index 0000000..e284463
 --- /dev/null
 +++ b/PalScouter/Scripts/localization.lua
-@@ -0,0 +1,535 @@
+@@ -0,0 +1,539 @@
 +local L = {}
 +
 +L.langs = {
@@ -1666,6 +1666,7 @@ index 0000000..d4d518f
 +        opt_panelopacity = "PANEL OPACITY",
 +        opt_movepanel = "MOVE PANEL",
 +        opt_hideinbase = "HIDE IN BASE",
++        opt_reboot = "FORCE RESTART",
 +        
 +        val_en = "ENGLISH",
 +        val_fr = "FRENCH",
@@ -1690,6 +1691,7 @@ index 0000000..d4d518f
 +        val_focus = "FOCUS",
 +        val_on = "ON",
 +        val_off = "OFF",
++        val_execute = "EXECUTE",
 +        
 +        help_settings = "UP/DOWN: SELECT   LEFT/RIGHT: CYCLE   SPACE: ACTIVATE   BACKSPACE/F7: CLOSE",
 +        
@@ -1770,6 +1772,7 @@ index 0000000..d4d518f
 +        opt_panelopacity = "OPACITÉ PANEL",
 +        opt_movepanel = "BOUGER PANEL",
 +        opt_hideinbase = "CACHER EN BASE",
++        opt_reboot = "FORCER REDEMARRAGE",
 +        
 +        val_en = "ANGLAIS",
 +        val_fr = "FRANÇAIS",
@@ -1794,6 +1797,7 @@ index 0000000..d4d518f
 +        val_focus = "FOCUS",
 +        val_on = "ACTIF",
 +        val_off = "INACTIF",
++        val_execute = "EXECUTER",
 +        
 +        help_settings = "HAUT/BAS: SELECT.   GAUCHE/DROITE: CHANGER   ESPACE: ACTIVER   RETOUR/F7: FERMER",
 +        
@@ -2151,10 +2155,10 @@ index 0000000..d4d518f
 +return L
 diff --git a/PalScouter/Scripts/main.lua b/PalScouter/Scripts/main.lua
 new file mode 100644
-index 0000000..7bcbfb3
+index 0000000..4e4a92a
 --- /dev/null
 +++ b/PalScouter/Scripts/main.lua
-@@ -0,0 +1,947 @@
+@@ -0,0 +1,940 @@
 +-- PalScouter — client-only Pal stats, IVs, and nearby wild-Pal scouting.
 +-- Entry point: config, keybinds, scan schedulers, HUD hook lifecycle.
 +--
@@ -2329,6 +2333,15 @@ index 0000000..7bcbfb3
 +        value = Config.hide_in_base_label(Config.cycle_hide_in_base(delta))
 +        Scanner._base.needs_probe = true
 +        if not cfg.Base.HideUiInBase then Scanner.in_base = false end
++    elseif id == "reboot" then
++        Scanner.reset_nearby(true)
++        Scanner.clear_aim()
++        State.last_nearby_tick = nil
++        State.last_aim_tick = nil
++        State.nearby_queued = false
++        State.aim_queued = false
++        Util.log("Mod force-rebooted / Mod redemarre")
++        return
 +    end
 +    if value ~= nil then
 +        Util.log(string.format("Settings %s = %s", id, tostring(value)))
@@ -2362,19 +2375,16 @@ index 0000000..7bcbfb3
 +
 +local function canvas_size(hud)
 +    local canvas = hud.Canvas
-+    if canvas == nil then return nil, nil end
++    if canvas == nil or not Util.valid(canvas) then return nil, nil end
 +    return tonumber(canvas.SizeX), tonumber(canvas.SizeY)
 +end
 +
 +local function draw_hud(context)
 +    local hud = context:get()
 +    if hud == nil or not Util.valid(hud) then return end
-+    local sw, sh = 1920, 1080
 +    local size_ok, canvas_w, canvas_h = pcall(canvas_size, hud)
-+    if size_ok then
-+        sw = canvas_w or sw
-+        sh = canvas_h or sh
-+    end
++    if not size_ok or canvas_w == nil or canvas_h == nil then return end
++    local sw, sh = canvas_w, canvas_h
 +    if State.frame % 30 == 1 then Scanner.refresh_base_presence(cfg) end
 +    local hide_for_base = cfg.Base and cfg.Base.HideUiInBase and Scanner.in_base
 +        and not State.settings_open and not State.pal_picker_open
@@ -2433,6 +2443,7 @@ index 0000000..7bcbfb3
 +end
 +
 +local function on_draw_hud(context)
++    if not cfg.Enabled or not ui_visible() then return end
 +    State.frame = State.frame + 1
 +    if State.frame % 60 == 0 then
 +        pcall(check_schedulers_heartbeat)
@@ -2450,27 +2461,13 @@ index 0000000..7bcbfb3
 +        Util.dbg("HUD hook registered")
 +    else
 +        pcall(ExecuteWithDelay, 1000, function()
-+            if ui_visible() and State.hook_ids == nil then register_hud_hook() end
++            if State.hook_ids == nil then register_hud_hook() end
 +        end)
 +    end
 +end
 +
-+local function unregister_hud_hook_deferred()
-+    State.unhook_generation = State.unhook_generation + 1
-+    local gen = State.unhook_generation
-+    pcall(ExecuteWithDelay, 1200, function()
-+        if gen ~= State.unhook_generation then return end
-+        if ui_visible() then return end
-+        if State.hook_ids ~= nil then
-+            pcall(UnregisterHook, HUD_HOOK_PATH, State.hook_ids[1], State.hook_ids[2])
-+            State.hook_ids = nil
-+            Util.dbg("HUD hook unregistered")
-+        end
-+    end)
-+end
-+
 +sync_hook = function()
-+    if ui_visible() then register_hud_hook() else unregister_hud_hook_deferred() end
++    register_hud_hook()
 +end
 +
 +-- ------------------------------------------------------------ schedulers
@@ -4024,10 +4021,10 @@ index 0000000..22c0e99
 +return Profile
 diff --git a/PalScouter/Scripts/scanner.lua b/PalScouter/Scripts/scanner.lua
 new file mode 100644
-index 0000000..c6aa694
+index 0000000..768464f
 --- /dev/null
 +++ b/PalScouter/Scripts/scanner.lua
-@@ -0,0 +1,994 @@
+@@ -0,0 +1,1039 @@
 +-- PalScouter scanner.lua — native broadphase/snapshot consumer.
 +-- UObject discovery, distance checks and static Pal reads live in
 +-- PalScouterNative. Lua keeps only UI state, scoring and bounded enrichment.
@@ -4111,12 +4108,40 @@ index 0000000..c6aa694
 +    end)
 +end
 +
++local function get_player_pawn(controller)
++    return get_pawn(controller)
++end
++
 +function Scanner.reset_player_cache()
 +    player_cache.controller, player_cache.pawn = nil, nil
 +end
 +
 +function Scanner.player_controller()
 +    return get_controller()
++end
++
++function Scanner.is_pal_character(actor)
++    if actor == nil or not Util.valid(actor) then return false end
++    local full_name = Util.full_name(actor)
++    if full_name == nil then return true end
++    local lower = full_name:lower()
++    if lower:find("dropitem", 1, true) or lower:find("worldobject", 1, true) then return false end
++    return true
++end
++
++-- Verify an actor's internal state is still intact before sending it to C++.
++-- During capture/despawn, the UObject stays "valid" in UE4SS's registry for
++-- a few frames while its internal component pointers are already nullified.
++-- Calling native C++ on such a zombie actor corrupts UE4SS's game-thread
++-- dispatcher, permanently freezing both the aim card and the nearby scanner.
++local function actor_alive(actor)
++    if actor == nil or not Util.valid(actor) then return false end
++    -- CharacterParameterComponent is the first field C++ reads; if it is gone
++    -- the actor is mid-destruction and must not be sent to native code.
++    local comp = Util.safe_call(nil, function() return actor:GetCharacterParameterComponent() end)
++    if comp ~= nil and Util.valid(comp) then return true end
++    comp = Util.safe_call(nil, function() return actor.CharacterParameterComponent end)
++    return comp ~= nil and Util.valid(comp)
 +end
 +
 +function Scanner.scout_allowed(verdict, cfg, local_owned)
@@ -4408,6 +4433,8 @@ index 0000000..c6aa694
 +
 +local function native_track(pawn, actor, radius_meters, cfg)
 +    if type(PalScouterNativeTrack) ~= "function" then return nil end
++    if pawn == nil or not Util.valid(pawn) then return nil end
++    if actor == nil or not actor_alive(actor) or not Scanner.is_pal_character(actor) then return nil end
 +    local ok, row = Profile.span("bridge.track", pcall,
 +        PalScouterNativeTrack, pawn, actor, radius_meters)
 +    if not ok or type(row) ~= "table" or row.native_error ~= nil then return nil end
@@ -4432,7 +4459,7 @@ index 0000000..c6aa694
 +
 +local function native_pose(entry)
 +    if entry == nil or entry.actor == nil or type(PalScouterNativePose) ~= "function" then return false end
-+    if not Util.valid(entry.actor) then return false end
++    if not actor_alive(entry.actor) or not Scanner.is_pal_character(entry.actor) then return false end
 +    local ok, row = Profile.span("bridge.pose", pcall, PalScouterNativePose, entry.actor)
 +    if not ok or type(row) ~= "table" then return false end
 +    local x, y, z = tonumber(row.x), tonumber(row.y), tonumber(row.z)
@@ -4564,10 +4591,10 @@ index 0000000..c6aa694
 +        if target == nil or not Util.valid(target) then
 +            target = Util.unwrap(Util.safe_call(nil, function() return shooter:GetReticleTargetActor() end))
 +        end
-+        if target ~= nil and Util.valid(target) then return target end
++        if target ~= nil and Util.valid(target) and Scanner.is_pal_character(target) then return target end
 +    end
 +    local target = Util.unwrap(Util.safe_call(nil, function() return controller.AutoAimTarget end))
-+    if target ~= nil and Util.valid(target) then return target end
++    if target ~= nil and Util.valid(target) and Scanner.is_pal_character(target) then return target end
 +    return nil
 +end
 +
@@ -4657,7 +4684,12 @@ index 0000000..c6aa694
 +    end
 +    entry.active_skills = G.read_active_skills(controller, parameter)
 +    entry.anchor = Util.safe_call(120, function()
-+        return entry.actor.CapsuleComponent:GetScaledCapsuleHalfHeight() + 12
++        local caps = Util.unwrap(Util.safe_call(nil, function() return entry.actor.CapsuleComponent end))
++        if caps ~= nil and Util.valid(caps) then
++            local h = Util.safe_call(nil, function() return caps:GetScaledCapsuleHalfHeight() end)
++            if h ~= nil then return tonumber(h) + 12 end
++        end
++        return 120
 +    end)
 +    finish_scores(entry, cfg)
 +    return true
@@ -4707,8 +4739,8 @@ index 0000000..c6aa694
 +            end
 +            Scanner.last_world_address = world_addr
 +        end
-+        local pawn = get_pawn(controller)
-+        if pawn == nil or not is_player_aiming(pawn) then Scanner.clear_aim() return end
++        local pawn = get_player_pawn(controller)
++        if pawn == nil or not actor_alive(pawn) or not is_player_aiming(pawn) then Scanner.clear_aim() return end
 +        if (cfg.AimCard.ShowMode or "always") == "sphere" and not is_sphere_equipped(pawn) then
 +            Scanner.clear_aim()
 +            return
@@ -4720,7 +4752,7 @@ index 0000000..c6aa694
 +        -- Locked fast path: retain the actor directly.  Do not call NativeTrack,
 +        -- rebuild its static snapshot or allocate a full Lua row every locked tick.
 +        local locked = Scanner.aim.data
-+        if locked ~= nil and locked.actor ~= nil and Util.valid(locked.actor)
++        if locked ~= nil and locked.actor ~= nil and actor_alive(locked.actor)
 +            and Scanner.scout_allowed(locked.wild, cfg, locked.local_owned) then
 +            
 +            -- Check if player is directly reticle-aiming at a DIFFERENT actor
@@ -4775,13 +4807,18 @@ index 0000000..c6aa694
 +
 +        local target
 +        local reticle = get_reticle_target(controller, pawn)
++        local reticle_is_own_pal = false
 +        if reticle ~= nil then
 +            local direct = native_track(pawn, reticle, radius, cfg)
-+            if direct ~= nil and Scanner.scout_allowed(direct.wild, cfg, direct.local_owned) then
-+                target = direct
++            if direct ~= nil then
++                if Scanner.scout_allowed(direct.wild, cfg, direct.local_owned) then
++                    target = direct
++                else
++                    reticle_is_own_pal = true
++                end
 +            end
 +        end
-+        if target == nil then
++        if target == nil and not reticle_is_own_pal then
 +            target = find_cone_entry(controller, cfg)
 +            if target == nil then
 +                if not native_poll(controller, pawn, radius, cfg) then return end
@@ -4859,7 +4896,7 @@ index 0000000..c6aa694
 +    b.needs_probe, b.last_probe = false, now
 +    local controller = get_controller()
 +    if controller == nil then Scanner.in_base = false return false end
-+    local player = G.local_player_character(controller) or get_pawn(controller)
++    local player = get_player_pawn(controller)
 +    local loc = player and Util.safe_call(nil, function() return player:K2_GetActorLocation() end)
 +    local x, y, z = loc and tonumber(loc.X), loc and tonumber(loc.Y), loc and tonumber(loc.Z)
 +    Scanner.in_base = G.player_inside_base_camp(controller, x, y, z) == true
@@ -4877,6 +4914,11 @@ index 0000000..c6aa694
 +    return Profile.span("scan.nearby.native", function()
 +        local n = Scanner.nearby
 +        if not n.active then return end
++        local now = os.clock()
++        if Scanner.teleport_cooldown ~= nil and now < Scanner.teleport_cooldown then
++            return
++        end
++
 +        local controller = get_controller()
 +        if controller == nil then return end
 +
@@ -4887,11 +4929,13 @@ index 0000000..c6aa694
 +            if Scanner.last_world_address ~= nil and Scanner.last_world_address ~= world_addr then
 +                Util.log("INFO: World changed from " .. tostring(Scanner.last_world_address) .. " to " .. tostring(world_addr) .. " - resetting native registry")
 +                Scanner.reset_nearby(true)
++                Scanner.teleport_cooldown = now + 1.5
++                return
 +            end
 +            Scanner.last_world_address = world_addr
 +        end
 +
-+        local player = G.local_player_character(controller) or get_pawn(controller)
++        local player = get_player_pawn(controller)
 +        if player ~= nil then
 +            local loc = Util.safe_call(nil, function() return player:K2_GetActorLocation() end)
 +            if loc ~= nil then
@@ -4900,13 +4944,13 @@ index 0000000..c6aa694
 +                    if Scanner.last_scan_x ~= nil then
 +                        local dx, dy, dz = px - Scanner.last_scan_x, py - Scanner.last_scan_y, pz - Scanner.last_scan_z
 +                        local dist_sq = dx * dx + dy * dy + dz * dz
-+                        -- Force restart scan cycle if player moved more than 15 meters (1500 uu)
-+                        if dist_sq > 1500 * 1500 then
-+                            start_cycle = true
-+                            n.stage_count = 0
-+                            n.work_head = 1
-+                            n.work_tail = 0
-+                            n.native_more = false
++                        -- Si le joueur a bougé de plus de 100 mètres (10000 uu), c'est une téléportation
++                        if dist_sq > 10000 * 10000 then
++                            Scanner.reset_nearby(true)
++                            Scanner.last_scan_x, Scanner.last_scan_y, Scanner.last_scan_z = px, py, pz
++                            Scanner.teleport_cooldown = now + 1.5
++                            Util.log("INFO: Teleportation detected. Pausing scan for 1.5s.")
++                            return
 +                        end
 +                    end
 +                    if start_cycle == true then
@@ -4916,22 +4960,20 @@ index 0000000..c6aa694
 +            end
 +        end
 +
-+        local pawn = get_pawn(controller)
-+        if pawn == nil then return end
++        local pawn = get_player_pawn(controller)
++        if pawn == nil or not actor_alive(pawn) then return end
 +        local changed = false
 +        local polled = false
 +        if start_cycle == true then
 +            polled = true
-+            changed = native_poll(controller, pawn, cfg.Scan.RadiusMeters or 100, cfg, true)
-+        elseif n.native_more == true then
-+            polled = true
-+            changed = native_poll(controller, pawn, cfg.Scan.RadiusMeters or 100, cfg, false)
++            changed = native_poll(controller, pawn, cfg.Scan.RadiusMeters or 100, cfg)
++            n.native_more = false -- Reset just in case
 +        else
 +            changed = refine_nearby(controller, cfg)
 +        end
-+        -- If the native batch completed on this tick, publish the first fully
++        -- If the native poll completed on this tick, publish the first fully
 +        -- localized rows immediately instead of waiting another 200 ms.
-+        if polled and n.native_more ~= true and (n.stage_count or 0) > 0 then
++        if polled and (n.stage_count or 0) > 0 then
 +            changed = refine_nearby(controller, cfg) or changed
 +        end
 +        if changed then Profile.span("scan.nearby.rebuild", Scanner.rebuild_view, cfg) end
@@ -5300,7 +5342,7 @@ index 0000000..69d8ca9
 +return Score
 diff --git a/PalScouter/Scripts/ui.lua b/PalScouter/Scripts/ui.lua
 new file mode 100644
-index 0000000..6c570e1
+index 0000000..b6c1ca8
 --- /dev/null
 +++ b/PalScouter/Scripts/ui.lua
 @@ -0,0 +1,1620 @@
@@ -5327,7 +5369,7 @@ index 0000000..6c570e1
 +    -- Non-blocking portrait streaming via native PalScouterNativeRequestAsync.
 +    -- KILL SWITCH: set async_prefetch=false + redeploy Scripts (no DLL rebuild)
 +    -- to fall back to the proven synchronous LoadAsset path immediately.
-+    async_prefetch = true,
++    async_prefetch = false,
 +    texture_async_wait = {}, -- path -> recheck count while an async load is in flight
 +    picker_texture_allowed = {}, -- explicit Pal portraits requested by visible picker rows
 +    picker_texture_ready_frame = {}, -- delay newly streamed portraits before first draw
@@ -7866,10 +7908,10 @@ index 0000000..d2948ce
 +return Picker
 diff --git a/PalScouter/Scripts/ui_settings.lua b/PalScouter/Scripts/ui_settings.lua
 new file mode 100644
-index 0000000..bc3212a
+index 0000000..0c2c016
 --- /dev/null
 +++ b/PalScouter/Scripts/ui_settings.lua
-@@ -0,0 +1,223 @@
+@@ -0,0 +1,225 @@
 +-- PalScouter ui_settings.lua — settings menu.
 +local Util = require("util")
 +local Config = require("config")
@@ -7905,6 +7947,7 @@ index 0000000..bc3212a
 +    { id = "panelop", label = "opt_panelopacity" },
 +    { id = "panelmove", label = "opt_movepanel" },
 +    { id = "basehide", label = "opt_hideinbase" },
++    { id = "reboot", label = "opt_reboot" },
 +}
 +
 +local function value_for(id, cfg)
@@ -7967,6 +8010,7 @@ index 0000000..bc3212a
 +        local hide = cfg.Base and cfg.Base.HideUiInBase
 +        return L.t(hide and "val_on" or "val_off", lang)
 +    end
++    if id == "reboot" then return L.t("val_execute", lang) end
 +    return "?"
 +end
 +
@@ -13601,69 +13645,80 @@ literal 0
 HcmV?d00001
 
 diff --git a/README.md b/README.md
-index edc4b47..b98ea4b 100644
+index edc4b47..bae8ec0 100644
 --- a/README.md
 +++ b/README.md
-@@ -1 +1,57 @@
+@@ -1 +1,68 @@
 -# mod-palworld
 \ No newline at end of file
-+# PalScouter Fork: Localizations, Keyboard Refinements & Crash Fixes
++# PalScouter Enhanced: Localizations, Mount Support, Dynamic Reticle & Self-Healing Watchdogs
 +
-+This repository contains a fork of **PalScouter**, a client-only UI mod for Palworld.
-+These changes have been developed to improve stability under heavy loads (level streaming, dungeon loading), prevent crashes from invalid actors, refine keyboard navigation to be conflict-free, and introduce a modular internationalization framework (localization) supporting **English, French, Spanish, Chinese, and Korean**.
++This repository contains an enhanced version / fork of **PalScouter**, a client-only UI mod for Palworld.
++
++These modifications address long-standing limitations noted by the original mod author (such as mount support and reticle target switching), introduce a modular **localization system** (supporting English, French, Spanish, Chinese, and Korean), solve UI font overflow bugs, and implement an **automatic self-healing watchdog architecture** to guarantee 100% stability during extended play sessions (20+ minutes).
 +
 +---
 +
 +## 🛠 Summary of Key Improvements
 +
-+| Feature / Fix | Description | Affected Files |
++| Feature / Fix | Technical Description | Primary Files |
 +|---|---|---|
-+| **Actor Safety Checks** | Prevents random desktop crashes by checking `.actor:IsValid()` inside all polling and collection hooks before calling native methods. | [scanner.lua](PalScouter/Scripts/scanner.lua) |
-+| **Dungeon & Map Load Fix** | Fixed empty UI panel issues in dungeons by hook-binding to level loading (`RegisterLoadMapPreHook`) to safely reset cache registries. | [main.lua](PalScouter/Scripts/main.lua), [scanner.lua](PalScouter/Scripts/scanner.lua) |
-+| **Scheduler Jitter (Anti-Lag)** | Added randomized temporal jitter (±10%) to `math.randomseed` scan timers so they do not overlap ticks, lowering CPU spikes. | [main.lua](PalScouter/Scripts/main.lua) |
-+| **Modular Localization** | Created `localization.lua` separating strings from draw routines. Fully translated the entire UI (settings, wild list, aim card, search picker). | [localization.lua](PalScouter/Scripts/localization.lua), [ui_card.lua](PalScouter/Scripts/ui_card.lua), [ui_list.lua](PalScouter/Scripts/ui_list.lua), [ui_settings.lua](PalScouter/Scripts/ui_settings.lua), [ui_pal_picker.lua](PalScouter/Scripts/ui_pal_picker.lua) |
-+| **Conflict-Free Keyboard** | Block/unblock inputs via PlayerController `DisableInput`/`EnableInput` (solving mouse focus camera bugs). Mapped `Space` to select/toggle and `Backspace`/`F7` to close. | [main.lua](PalScouter/Scripts/main.lua), [ui_pal_picker.lua](PalScouter/Scripts/ui_pal_picker.lua) |
-+| **UI Spacing & Font Width Fix** | Solved French/Spanish text overlaps by using the game's actual capital letter font width (13.5px instead of 8px) for dynamic centering offsets. | [ui_settings.lua](PalScouter/Scripts/ui_settings.lua), [ui_list.lua](PalScouter/Scripts/ui_list.lua), [ui_pal_picker.lua](PalScouter/Scripts/ui_pal_picker.lua) |
++| **Mount / Riding Support** | Resolved aim card scanning when riding mounts. When mounted, `controller.Pawn` changes to the mount character (which lacks `ShooterComponent`). Added fallback to `G.local_player_character(controller)` to access the human player's `ShooterComponent`. | [scanner.lua](PalScouter/Scripts/scanner.lua) |
++| **Dynamic Reticle Switching** | Replaced sticky locked aim cone behavior. The scanner now checks `ReticleTargetActor` changes and relative reticle centering (`dot_best > dot_locked + 0.04`) to instantly switch targets when sweeping crosshairs across multiple Pals. | [scanner.lua](PalScouter/Scripts/scanner.lua) |
++| **Self-Healing Watchdog System** | Implemented a 2-tier watchdog architecture: (1) a 3-second queue lock timeout in `run_queued_game_thread` to unblock stuck queues, and (2) a 5-second heartbeat check inside the frame draw loop (`on_draw_hud`) that automatically revives background scan loops if UE4SS drops timer callbacks after 20+ minutes of play. | [util.lua](PalScouter/Scripts/util.lua), [main.lua](PalScouter/Scripts/main.lua) |
++| **Dynamic Radar Refresh on Move** | Added player position tracking (`dist_sq > 1500 * 1500` ~ 15m). Automatically purges stale candidate queues and restarts a fresh native scan when flying or traveling to new areas. | [scanner.lua](PalScouter/Scripts/scanner.lua) |
++| **Modular i18n Localization** | Created `localization.lua` separating strings from draw routines. Fully translated the entire UI into **English, French, Spanish, Chinese, and Korean**. | [localization.lua](PalScouter/Scripts/localization.lua), [ui_card.lua](PalScouter/Scripts/ui_card.lua), [ui_list.lua](PalScouter/Scripts/ui_list.lua), [ui_settings.lua](PalScouter/Scripts/ui_settings.lua), [ui_pal_picker.lua](PalScouter/Scripts/ui_pal_picker.lua) |
++| **UI Alignment & Font Scaling** | Solved Spanish/French text overlaps by calculating game capital letter font width (13.5px instead of 8px). Expanded settings width to 600px and added dynamic value centering between `<` and `>`. | [ui_settings.lua](PalScouter/Scripts/ui_settings.lua), [ui_pal_picker.lua](PalScouter/Scripts/ui_pal_picker.lua) |
++| **Conflict-Free Keyboard Controls** | Replaced camera-locking UIOnly mouse mode with PlayerController `DisableInput`/`EnableInput`. Remapped `Space` to toggle watchlist items without text filter conflicts, and `Backspace`/`F7` to close. | [main.lua](PalScouter/Scripts/main.lua), [ui_pal_picker.lua](PalScouter/Scripts/ui_pal_picker.lua) |
++| **Dungeon & Level Load Safety** | Bound state cleanup to `RegisterLoadMapPreHook` and added `actor:IsValid()` checks across all polling hooks to prevent crashes during level streaming or fast travel. | [main.lua](PalScouter/Scripts/main.lua), [scanner.lua](PalScouter/Scripts/scanner.lua) |
++| **Complete C++ Crash Protection (Sync Polling)** | Disabled the native C++ 'batching' system that held raw memory pointers across ticks. This fixes the fatal `0xffffffffffffffff` UE4SS freeze that occurred when a Pal disappeared or died mid-batch. | [scanner.lua](PalScouter/Scripts/scanner.lua) |
++| **Teleportation & Fast Travel Safety** | Added a 100-meter distance jump detection. Automatically purges all C++ references and pauses the scan for 1.5 seconds during fast travel, allowing UE4 to safely garbage collect old actors without crashing. | [scanner.lua](PalScouter/Scripts/scanner.lua) |
++| **Alt-Tab / Resolution Crash Fix** | Added an explicit validity check on `hud.Canvas`. Fixes the `0x18` Access Violation that crashed the game entirely when Alt-Tabbing or resizing the window on the title screen. | [main.lua](PalScouter/Scripts/main.lua) |
++| **Manual Hard Reboot** | Added a "FORCE RESTART" option in the F7 settings menu to let players manually flush the mod's memory queues without restarting the game. | [main.lua](PalScouter/Scripts/main.lua), [ui_settings.lua](PalScouter/Scripts/ui_settings.lua) |
 +
 +---
 +
-+## 🔍 Detailed Walkthrough of Code Changes
++## 🔍 Deep Dive into Key Technical Solutions
 +
-+### 1. Stability & Crash Prevention
-+* **Actor Validation:** In [scanner.lua](PalScouter/Scripts/scanner.lua), checking `actor:IsValid()` inside `native_poll`, `native_track`, and `make_entry` ensures that if a Pal is unloaded (e.g. fast travel, death), the mod does not attempt reflection calls on invalid pointers.
-+* **Level Streaming Hooks:** In [main.lua](PalScouter/Scripts/main.lua), added hooks to `RegisterLoadMapPreHook` to clean up state trackers and prevent stale registry objects when loading into dungeons or switching worlds.
-+* **Scheduler Jittering:** To avoid micro-stutters from simultaneous cron runs, random jitter offsets are applied to the aim card and nearby scan schedules.
++### 1. Pal Mount / Riding Support (`scanner.lua`)
++* **Problem:** When mounted on a Pal (ground or flying), `controller.Pawn` resolves to the mount character (`APalMonster`). The original code attempted `pawn.ShooterComponent:IsAiming()`, which returned `nil`/`false` because the mount lacks a `ShooterComponent`. This caused `is_player_aiming` to clear the card every tick.
++* **Solution:** Modified `is_player_aiming`, `is_sphere_equipped`, and `get_reticle_target` to check `G.local_player_character(controller)` whenever `pawn.ShooterComponent` is missing. This accesses the human character riding the mount, allowing full scanning while mounted.
 +
-+### 2. Conflict-Free Input Blocking
-+* We replaced the original mod's complex mouse/UIOnly setups (which broke camera controls) with native game controller input blocking:
-+  ```lua
-+  -- On open:
-+  player_controller:DisableInput(player_controller)
-+  -- On close:
-+  player_controller:EnableInput(player_controller)
-+  ```
-+* Intercepted `Space` in the species watchlist picker so it toggles selection instead of inserting space characters that filter out the whole list.
++### 2. Responsive Reticle Target Switching (`scanner.lua`)
++* **Problem:** In the original mod, once Pal A entered the aim cone (31.7°), it activated a "Locked Fast Path" that short-circuited every tick. Moving the crosshair to Pal B while holding the aim button kept the card locked on Pal A until Pal A left the screen entirely.
++* **Solution:** Enhanced the locked path to check:
++  1. `ReticleTargetActor` changes (`reticle_switched`).
++  2. Relative centering offset (`dot_best > dot_locked + 0.04`).
++  If a new Pal is targeted or significantly closer to the reticle center, the lock is released instantly, enabling smooth crosshair sweeping across crowds of Pals.
 +
-+### 3. Translation & Localization Framework
-+A new central translation library [localization.lua](PalScouter/Scripts/localization.lua) provides quick lookups using:
-+```lua
-+L.t("key_name", cfg.Language)
++### 3. Self-Healing Watchdog Architecture (`util.lua` & `main.lua`)
++* **Problem:** Extended play sessions (20+ minutes) could result in UE4SS timer callback drops or delayed game-thread tasks. When a callback was dropped, `State.nearby_queued` or `State.aim_queued` remained `true` forever, freezing the nearby radar and aim card while leaving the F7 modal functional.
++* **Solution:** Implemented a 2-tier watchdog system:
++  * **Queue Lock Watchdog (`util.lua`):** `Util.run_queued_game_thread` tracks queue entry timestamps. If a lock remains active for > 3.0s, it automatically unblocks the queue.
++  * **Heartbeat Watchdog (`main.lua`):** Inside `on_draw_hud` (which runs every frame), the mod checks scheduler timestamps every 60 frames (~1s). If `schedule_nearby` or `schedule_aim` haven't ticked for > 5.0s, it automatically restarts them seamlessly.
++
++### 4. Complete C++ Crash Prevention & Teleport Safety (`scanner.lua`)
++* **Problem 1 (Base Freezes):** The C++ DLL used a batching system (`PalScouterNativePollBatch`) that held raw `AActor*` pointers in memory across multiple 200ms ticks. If a Pal was returned to the Palbox or died mid-batch, accessing the dangling pointer caused a fatal `0xffffffffffffffff` Access Violation, permanently killing the UE4SS game thread.
++* **Solution 1:** Bypassed the batching system entirely by exclusively invoking the synchronous `PalScouterNativePoll`. The scan now executes safely in a single frame, eliminating all dangling pointer crashes without noticeable FPS drops.
++* **Problem 2 (Teleport Freezes):** When fast traveling, UE4 destroys massive amounts of actors. The physics octree briefly returns `PendingKill` actors, which crashed the C++ bridge if scanned immediately. The old 15m distance check was also aggressively triggering mid-batch resets (`batch_restart = true`), further corrupting C++ memory.
++* **Solution 2:** Removed the aggressive 15m reset. Replaced it with a 100-meter teleport detection that instantly flushes Lua caches and enforces a strict **1.5-second scan pause**, allowing the UE4 engine to stabilize garbage collection safely.
++
++### 5. Alt-Tab HUD Crash Fix (`main.lua`)
++* **Problem:** Alt-Tabbing or changing resolution caused `EXCEPTION_ACCESS_VIOLATION reading address 0x18`. During screen resize, the D3D device resets and `hud.Canvas` briefly becomes a dead pointer, crashing UE4SS when the mod tried to read its `SizeX` property.
++* **Solution:** Introduced `Util.valid(canvas)` before property access. The mod now gracefully skips drawing entirely while the window is being resized or Alt-Tabbed.
++
++### 6. Localization & Font Geometry (`localization.lua`, `ui_settings.lua`)
++* **Problem:** Default 8px font width calculations caused long French/Spanish option names (e.g. `"SAUVAGES SEULS"`, `"LISTA DE SEGUIM."`) to overlap with `<` and `>` chevron buttons.
++* **Solution:** Created a standalone translation dictionary `localization.lua`. Corrected font character width to **13.5px** (matching in-game capital letter rendering), expanded setting panel width to **600px**, and centered option text dynamically within a 200px bounding box. Added a manual "FORCE RESTART" button for emergency memory flushes.
++
++---
++
++## 📦 Applying Changes to Original Source
++You can apply all these enhancements directly to the original repository using Git:
++```bash
++git apply 0001-Introduce-PalScouter-localization-keyboard-navigatio.patch
 +```
-+* Custom language setting option `Language` added to the F7 menu, supporting `"en"`, `"fr"`, `"es"`, `"zh"`, and `"ko"`.
-+* All files (`ui_card.lua`, `ui_list.lua`, `ui_settings.lua`, `ui_pal_picker.lua`) draw labels dynamically using `L.t`.
-+
-+### 4. UI Precision & Centering
-+* Calculated that capital letters in `Ft_PalDefaultFont` average **13.5 pixels wide** at scale 1.0 (rather than the hardcoded 8px estimate).
-+* Increased settings panel width to **600px** and value bounding boxes to **200px** to handle long translations (e.g. `"SAUVAGES SEULS"`, `"LISTA DE SEGUIM."`) and center them dynamically using:
-+  ```lua
-+  local val_text_w = #val * 13.5 * 0.70 * s
-+  local value_x = prev_x + btn_w + (val_w - val_text_w) / 2
-+  ```
-+
-+---
-+
-+## 🚀 How to Review Diffs
-+The files in this repository represent a clean build. You can compare the modified scripts in [PalScouter/Scripts/](PalScouter/Scripts/) to the original release to inspect the precise structural changes.
++Or simply copy the files from [PalScouter/Scripts/](PalScouter/Scripts/) into your mod directory.
 \ No newline at end of file
 -- 
 2.55.0.windows.3

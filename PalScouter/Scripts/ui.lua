@@ -21,7 +21,7 @@ local UI = {
     -- Non-blocking portrait streaming via native PalScouterNativeRequestAsync.
     -- KILL SWITCH: set async_prefetch=false + redeploy Scripts (no DLL rebuild)
     -- to fall back to the proven synchronous LoadAsset path immediately.
-    async_prefetch = true,
+    async_prefetch = false,
     texture_async_wait = {}, -- path -> recheck count while an async load is in flight
     picker_texture_allowed = {}, -- explicit Pal portraits requested by visible picker rows
     picker_texture_ready_frame = {}, -- delay newly streamed portraits before first draw
