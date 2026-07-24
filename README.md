@@ -21,7 +21,8 @@ These modifications address long-standing limitations noted by the original mod 
 | **Complete C++ Crash Protection (Sync Polling)** | Disabled the native C++ 'batching' system that held raw memory pointers across ticks. This fixes the fatal `0xffffffffffffffff` UE4SS freeze that occurred when a Pal disappeared or died mid-batch. | [scanner.lua](PalScouter/Scripts/scanner.lua) |
 | **Teleportation & Fast Travel Safety** | Added a 100-meter distance jump detection. Automatically purges all C++ references and pauses the scan for 1.5 seconds during fast travel, allowing UE4 to safely garbage collect old actors without crashing. | [scanner.lua](PalScouter/Scripts/scanner.lua) |
 | **Alt-Tab / Resolution Crash Fix** | Added an explicit validity check on `hud.Canvas`. Fixes the `0x18` Access Violation that crashed the game entirely when Alt-Tabbing or resizing the window on the title screen. | [main.lua](PalScouter/Scripts/main.lua) |
-| **Manual Hard Reboot** | Added a "FORCE RESTART" option in the F7 settings menu to let players manually flush the mod's memory queues without restarting the game. | [main.lua](PalScouter/Scripts/main.lua), [ui_settings.lua](PalScouter/Scripts/ui_settings.lua) |
+| **Capture Crash Protection** | Checked `SaveParameter` validity before querying combat stats. Fixes a fatal `EXCEPTION_ACCESS_VIOLATION` in UE4 when scanning a Pal that was just successfully captured (since its save data is transferred to the Palbox, leaving a dangling pointer). | [gamedata.lua](PalScouter/Scripts/gamedata.lua) |
+
 
 ---
 
@@ -50,13 +51,15 @@ These modifications address long-standing limitations noted by the original mod 
 * **Problem 2 (Teleport Freezes):** When fast traveling, UE4 destroys massive amounts of actors. The physics octree briefly returns `PendingKill` actors, which crashed the C++ bridge if scanned immediately. The old 15m distance check was also aggressively triggering mid-batch resets (`batch_restart = true`), further corrupting C++ memory.
 * **Solution 2:** Removed the aggressive 15m reset. Replaced it with a 100-meter teleport detection that instantly flushes Lua caches and enforces a strict **1.5-second scan pause**, allowing the UE4 engine to stabilize garbage collection safely.
 
-### 5. Alt-Tab HUD Crash Fix (`main.lua`)
-* **Problem:** Alt-Tabbing or changing resolution caused `EXCEPTION_ACCESS_VIOLATION reading address 0x18`. During screen resize, the D3D device resets and `hud.Canvas` briefly becomes a dead pointer, crashing UE4SS when the mod tried to read its `SizeX` property.
-* **Solution:** Introduced `Util.valid(canvas)` before property access. The mod now gracefully skips drawing entirely while the window is being resized or Alt-Tabbed.
+### 5. Alt-Tab & Capture Crash Fixes
+* **Problem 1 (Alt-Tab):** Alt-Tabbing or changing resolution caused `EXCEPTION_ACCESS_VIOLATION reading address 0x18`. During screen resize, the D3D device resets and `hud.Canvas` briefly becomes a dead pointer.
+* **Solution 1:** Introduced `Util.valid(canvas)` before property access. The mod gracefully skips drawing while the window is being resized.
+* **Problem 2 (Capture):** Capturing a Pal transfers its internal `SaveParameter` data to the Palbox. If the mod attempted to read its HP or Attack power in the exact frame before the actor was destroyed, the C++ getter dereferenced a `nullptr`, crashing the entire game.
+* **Solution 2:** Added an explicit `parameter.SaveParameter` null-check in `G.get_parameter` before allowing any C++ stat reads.
 
 ### 6. Localization & Font Geometry (`localization.lua`, `ui_settings.lua`)
 * **Problem:** Default 8px font width calculations caused long French/Spanish option names (e.g. `"SAUVAGES SEULS"`, `"LISTA DE SEGUIM."`) to overlap with `<` and `>` chevron buttons.
-* **Solution:** Created a standalone translation dictionary `localization.lua`. Corrected font character width to **13.5px** (matching in-game capital letter rendering), expanded setting panel width to **600px**, and centered option text dynamically within a 200px bounding box. Added a manual "FORCE RESTART" button for emergency memory flushes.
+* **Solution:** Created a standalone translation dictionary `localization.lua`. Corrected font character width to **13.5px** (matching in-game capital letter rendering), expanded setting panel width to **600px**, and centered option text dynamically within a 200px bounding box.
 
 ---
 

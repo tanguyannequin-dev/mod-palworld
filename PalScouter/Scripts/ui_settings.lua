@@ -33,7 +33,6 @@ Settings.ROWS = {
     { id = "panelop", label = "opt_panelopacity" },
     { id = "panelmove", label = "opt_movepanel" },
     { id = "basehide", label = "opt_hideinbase" },
-    { id = "reboot", label = "opt_reboot" },
 }
 
 local function value_for(id, cfg)
@@ -96,7 +95,6 @@ local function value_for(id, cfg)
         local hide = cfg.Base and cfg.Base.HideUiInBase
         return L.t(hide and "val_on" or "val_off", lang)
     end
-    if id == "reboot" then return L.t("val_execute", lang) end
     return "?"
 end
 

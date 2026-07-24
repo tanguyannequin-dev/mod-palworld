@@ -1,4 +1,4 @@
-From 0f95905583b63dd35fe336a3c0736bf0568a7289 Mon Sep 17 00:00:00 2001
+From 314aa17bbc53cf5b0689b8c5a43ec9a4fd1810db Mon Sep 17 00:00:00 2001
 From: contact71 <contact@etabli-digital.com>
 Date: Tue, 21 Jul 2026 16:24:46 +0200
 Subject: [PATCH] Introduce PalScouter localization, keyboard navigation
@@ -8,25 +8,25 @@ Subject: [PATCH] Introduce PalScouter localization, keyboard navigation
  PalScouter/PalScouter.userconfig.lua  |   70 ++
  PalScouter/Scripts/config.lua         |  681 +++++++++++
  PalScouter/Scripts/direction.lua      |   41 +
- PalScouter/Scripts/gamedata.lua       |  744 ++++++++++++
+ PalScouter/Scripts/gamedata.lua       |  750 ++++++++++++
  PalScouter/Scripts/localization.lua   |  539 ++++++++
- PalScouter/Scripts/main.lua           |  940 ++++++++++++++
+ PalScouter/Scripts/main.lua           |  931 ++++++++++++++
  PalScouter/Scripts/pal_icon_names.lua |  420 +++++++
  PalScouter/Scripts/passive_ranks.lua  |  250 ++++
  PalScouter/Scripts/passive_tags.lua   |   72 ++
  PalScouter/Scripts/profile.lua        |  154 +++
- PalScouter/Scripts/scanner.lua        | 1039 ++++++++++++++++
+ PalScouter/Scripts/scanner.lua        | 1045 ++++++++++++++++
  PalScouter/Scripts/score.lua          |  270 +++++
  PalScouter/Scripts/ui.lua             | 1620 +++++++++++++++++++++++++
  PalScouter/Scripts/ui_card.lua        |  266 ++++
  PalScouter/Scripts/ui_list.lua        |  161 +++
  PalScouter/Scripts/ui_pal_picker.lua  |  495 ++++++++
- PalScouter/Scripts/ui_settings.lua    |  225 ++++
+ PalScouter/Scripts/ui_settings.lua    |  223 ++++
  PalScouter/Scripts/util.lua           |  175 +++
  PalScouter/Scripts/waza_ids.lua       |  396 ++++++
  PalScouter/dlls/main.dll              |  Bin 0 -> 517632 bytes
- README.md                             |   69 +-
- 21 files changed, 8626 insertions(+), 1 deletion(-)
+ README.md                             |   72 +-
+ 21 files changed, 8630 insertions(+), 1 deletion(-)
  create mode 100644 PalScouter/PalScouter.userconfig.lua
  create mode 100644 PalScouter/Scripts/config.lua
  create mode 100644 PalScouter/Scripts/direction.lua
@@ -860,10 +860,10 @@ index 0000000..b48ec51
 +return Direction
 diff --git a/PalScouter/Scripts/gamedata.lua b/PalScouter/Scripts/gamedata.lua
 new file mode 100644
-index 0000000..0614825
+index 0000000..d8b3315
 --- /dev/null
 +++ b/PalScouter/Scripts/gamedata.lua
-@@ -0,0 +1,744 @@
+@@ -0,0 +1,750 @@
 +-- PalScouter gamedata.lua — cached game-object access, localization, passive ranks.
 +-- Every UObject touch is pcall-guarded. All functions must be called on the game thread.
 +local Util = require("util")
@@ -1061,6 +1061,12 @@ index 0000000..0614825
 +    if component == nil or not Util.valid(component) then return nil, nil end
 +    local parameter = Util.safe_call(nil, function() return component.IndividualParameter end)
 +    if parameter == nil or not Util.valid(parameter) then return nil, component end
++
++    -- CRITICAL FIX: If SaveParameter is null, it means the Pal was captured or
++    -- moved to Palbox. Calling C++ getters like GetHP() will cause a fatal crash!
++    local sp = Util.safe_call(nil, function() return parameter.SaveParameter end)
++    if sp == nil or not Util.valid(sp) then return nil, component end
++
 +    return parameter, component
 +end
 +
@@ -2155,10 +2161,10 @@ index 0000000..e284463
 +return L
 diff --git a/PalScouter/Scripts/main.lua b/PalScouter/Scripts/main.lua
 new file mode 100644
-index 0000000..4e4a92a
+index 0000000..f946ef5
 --- /dev/null
 +++ b/PalScouter/Scripts/main.lua
-@@ -0,0 +1,940 @@
+@@ -0,0 +1,931 @@
 +-- PalScouter — client-only Pal stats, IVs, and nearby wild-Pal scouting.
 +-- Entry point: config, keybinds, scan schedulers, HUD hook lifecycle.
 +--
@@ -2333,15 +2339,6 @@ index 0000000..4e4a92a
 +        value = Config.hide_in_base_label(Config.cycle_hide_in_base(delta))
 +        Scanner._base.needs_probe = true
 +        if not cfg.Base.HideUiInBase then Scanner.in_base = false end
-+    elseif id == "reboot" then
-+        Scanner.reset_nearby(true)
-+        Scanner.clear_aim()
-+        State.last_nearby_tick = nil
-+        State.last_aim_tick = nil
-+        State.nearby_queued = false
-+        State.aim_queued = false
-+        Util.log("Mod force-rebooted / Mod redemarre")
-+        return
 +    end
 +    if value ~= nil then
 +        Util.log(string.format("Settings %s = %s", id, tostring(value)))
@@ -4021,10 +4018,10 @@ index 0000000..22c0e99
 +return Profile
 diff --git a/PalScouter/Scripts/scanner.lua b/PalScouter/Scripts/scanner.lua
 new file mode 100644
-index 0000000..768464f
+index 0000000..d96d122
 --- /dev/null
 +++ b/PalScouter/Scripts/scanner.lua
-@@ -0,0 +1,1039 @@
+@@ -0,0 +1,1045 @@
 +-- PalScouter scanner.lua — native broadphase/snapshot consumer.
 +-- UObject discovery, distance checks and static Pal reads live in
 +-- PalScouterNative. Lua keeps only UI state, scoring and bounded enrichment.
@@ -4136,8 +4133,14 @@ index 0000000..768464f
 +-- dispatcher, permanently freezing both the aim card and the nearby scanner.
 +local function actor_alive(actor)
 +    if actor == nil or not Util.valid(actor) then return false end
-+    -- CharacterParameterComponent is the first field C++ reads; if it is gone
-+    -- the actor is mid-destruction and must not be sent to native code.
++    -- Check if critical components are still attached. During destruction (e.g.,
++    -- condensing a Pal or moving to Palbox), these are nulled before the actor dies.
++    local mesh = Util.safe_call(nil, function() return actor.Mesh end)
++    if mesh == nil or not Util.valid(mesh) then return false end
++
++    local movement = Util.safe_call(nil, function() return actor.CharacterMovement end)
++    if movement == nil or not Util.valid(movement) then return false end
++
 +    local comp = Util.safe_call(nil, function() return actor:GetCharacterParameterComponent() end)
 +    if comp ~= nil and Util.valid(comp) then return true end
 +    comp = Util.safe_call(nil, function() return actor.CharacterParameterComponent end)
@@ -7908,10 +7911,10 @@ index 0000000..d2948ce
 +return Picker
 diff --git a/PalScouter/Scripts/ui_settings.lua b/PalScouter/Scripts/ui_settings.lua
 new file mode 100644
-index 0000000..0c2c016
+index 0000000..bc3212a
 --- /dev/null
 +++ b/PalScouter/Scripts/ui_settings.lua
-@@ -0,0 +1,225 @@
+@@ -0,0 +1,223 @@
 +-- PalScouter ui_settings.lua — settings menu.
 +local Util = require("util")
 +local Config = require("config")
@@ -7947,7 +7950,6 @@ index 0000000..0c2c016
 +    { id = "panelop", label = "opt_panelopacity" },
 +    { id = "panelmove", label = "opt_movepanel" },
 +    { id = "basehide", label = "opt_hideinbase" },
-+    { id = "reboot", label = "opt_reboot" },
 +}
 +
 +local function value_for(id, cfg)
@@ -8010,7 +8012,6 @@ index 0000000..0c2c016
 +        local hide = cfg.Base and cfg.Base.HideUiInBase
 +        return L.t(hide and "val_on" or "val_off", lang)
 +    end
-+    if id == "reboot" then return L.t("val_execute", lang) end
 +    return "?"
 +end
 +
@@ -13645,10 +13646,10 @@ literal 0
 HcmV?d00001
 
 diff --git a/README.md b/README.md
-index edc4b47..bae8ec0 100644
+index edc4b47..ccf68f0 100644
 --- a/README.md
 +++ b/README.md
-@@ -1 +1,68 @@
+@@ -1 +1,71 @@
 -# mod-palworld
 \ No newline at end of file
 +# PalScouter Enhanced: Localizations, Mount Support, Dynamic Reticle & Self-Healing Watchdogs
@@ -13674,7 +13675,8 @@ index edc4b47..bae8ec0 100644
 +| **Complete C++ Crash Protection (Sync Polling)** | Disabled the native C++ 'batching' system that held raw memory pointers across ticks. This fixes the fatal `0xffffffffffffffff` UE4SS freeze that occurred when a Pal disappeared or died mid-batch. | [scanner.lua](PalScouter/Scripts/scanner.lua) |
 +| **Teleportation & Fast Travel Safety** | Added a 100-meter distance jump detection. Automatically purges all C++ references and pauses the scan for 1.5 seconds during fast travel, allowing UE4 to safely garbage collect old actors without crashing. | [scanner.lua](PalScouter/Scripts/scanner.lua) |
 +| **Alt-Tab / Resolution Crash Fix** | Added an explicit validity check on `hud.Canvas`. Fixes the `0x18` Access Violation that crashed the game entirely when Alt-Tabbing or resizing the window on the title screen. | [main.lua](PalScouter/Scripts/main.lua) |
-+| **Manual Hard Reboot** | Added a "FORCE RESTART" option in the F7 settings menu to let players manually flush the mod's memory queues without restarting the game. | [main.lua](PalScouter/Scripts/main.lua), [ui_settings.lua](PalScouter/Scripts/ui_settings.lua) |
++| **Capture Crash Protection** | Checked `SaveParameter` validity before querying combat stats. Fixes a fatal `EXCEPTION_ACCESS_VIOLATION` in UE4 when scanning a Pal that was just successfully captured (since its save data is transferred to the Palbox, leaving a dangling pointer). | [gamedata.lua](PalScouter/Scripts/gamedata.lua) |
++
 +
 +---
 +
@@ -13703,13 +13705,15 @@ index edc4b47..bae8ec0 100644
 +* **Problem 2 (Teleport Freezes):** When fast traveling, UE4 destroys massive amounts of actors. The physics octree briefly returns `PendingKill` actors, which crashed the C++ bridge if scanned immediately. The old 15m distance check was also aggressively triggering mid-batch resets (`batch_restart = true`), further corrupting C++ memory.
 +* **Solution 2:** Removed the aggressive 15m reset. Replaced it with a 100-meter teleport detection that instantly flushes Lua caches and enforces a strict **1.5-second scan pause**, allowing the UE4 engine to stabilize garbage collection safely.
 +
-+### 5. Alt-Tab HUD Crash Fix (`main.lua`)
-+* **Problem:** Alt-Tabbing or changing resolution caused `EXCEPTION_ACCESS_VIOLATION reading address 0x18`. During screen resize, the D3D device resets and `hud.Canvas` briefly becomes a dead pointer, crashing UE4SS when the mod tried to read its `SizeX` property.
-+* **Solution:** Introduced `Util.valid(canvas)` before property access. The mod now gracefully skips drawing entirely while the window is being resized or Alt-Tabbed.
++### 5. Alt-Tab & Capture Crash Fixes
++* **Problem 1 (Alt-Tab):** Alt-Tabbing or changing resolution caused `EXCEPTION_ACCESS_VIOLATION reading address 0x18`. During screen resize, the D3D device resets and `hud.Canvas` briefly becomes a dead pointer.
++* **Solution 1:** Introduced `Util.valid(canvas)` before property access. The mod gracefully skips drawing while the window is being resized.
++* **Problem 2 (Capture):** Capturing a Pal transfers its internal `SaveParameter` data to the Palbox. If the mod attempted to read its HP or Attack power in the exact frame before the actor was destroyed, the C++ getter dereferenced a `nullptr`, crashing the entire game.
++* **Solution 2:** Added an explicit `parameter.SaveParameter` null-check in `G.get_parameter` before allowing any C++ stat reads.
 +
 +### 6. Localization & Font Geometry (`localization.lua`, `ui_settings.lua`)
 +* **Problem:** Default 8px font width calculations caused long French/Spanish option names (e.g. `"SAUVAGES SEULS"`, `"LISTA DE SEGUIM."`) to overlap with `<` and `>` chevron buttons.
-+* **Solution:** Created a standalone translation dictionary `localization.lua`. Corrected font character width to **13.5px** (matching in-game capital letter rendering), expanded setting panel width to **600px**, and centered option text dynamically within a 200px bounding box. Added a manual "FORCE RESTART" button for emergency memory flushes.
++* **Solution:** Created a standalone translation dictionary `localization.lua`. Corrected font character width to **13.5px** (matching in-game capital letter rendering), expanded setting panel width to **600px**, and centered option text dynamically within a 200px bounding box.
 +
 +---
 +

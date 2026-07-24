@@ -172,15 +172,6 @@ local function apply_settings_action(action)
         value = Config.hide_in_base_label(Config.cycle_hide_in_base(delta))
         Scanner._base.needs_probe = true
         if not cfg.Base.HideUiInBase then Scanner.in_base = false end
-    elseif id == "reboot" then
-        Scanner.reset_nearby(true)
-        Scanner.clear_aim()
-        State.last_nearby_tick = nil
-        State.last_aim_tick = nil
-        State.nearby_queued = false
-        State.aim_queued = false
-        Util.log("Mod force-rebooted / Mod redemarre")
-        return
     end
     if value ~= nil then
         Util.log(string.format("Settings %s = %s", id, tostring(value)))

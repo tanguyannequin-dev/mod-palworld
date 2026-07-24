@@ -195,6 +195,12 @@ function G.get_parameter(actor)
     if component == nil or not Util.valid(component) then return nil, nil end
     local parameter = Util.safe_call(nil, function() return component.IndividualParameter end)
     if parameter == nil or not Util.valid(parameter) then return nil, component end
+
+    -- CRITICAL FIX: If SaveParameter is null, it means the Pal was captured or
+    -- moved to Palbox. Calling C++ getters like GetHP() will cause a fatal crash!
+    local sp = Util.safe_call(nil, function() return parameter.SaveParameter end)
+    if sp == nil or not Util.valid(sp) then return nil, component end
+
     return parameter, component
 end
 

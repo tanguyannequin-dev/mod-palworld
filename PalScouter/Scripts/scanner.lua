@@ -109,8 +109,14 @@ end
 -- dispatcher, permanently freezing both the aim card and the nearby scanner.
 local function actor_alive(actor)
     if actor == nil or not Util.valid(actor) then return false end
-    -- CharacterParameterComponent is the first field C++ reads; if it is gone
-    -- the actor is mid-destruction and must not be sent to native code.
+    -- Check if critical components are still attached. During destruction (e.g.,
+    -- condensing a Pal or moving to Palbox), these are nulled before the actor dies.
+    local mesh = Util.safe_call(nil, function() return actor.Mesh end)
+    if mesh == nil or not Util.valid(mesh) then return false end
+
+    local movement = Util.safe_call(nil, function() return actor.CharacterMovement end)
+    if movement == nil or not Util.valid(movement) then return false end
+
     local comp = Util.safe_call(nil, function() return actor:GetCharacterParameterComponent() end)
     if comp ~= nil and Util.valid(comp) then return true end
     comp = Util.safe_call(nil, function() return actor.CharacterParameterComponent end)
