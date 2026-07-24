@@ -581,7 +581,7 @@ local save_generation = 0
 function Config.queue_save()
     save_generation = save_generation + 1
     local gen = save_generation
-    pcall(ExecuteWithDelay, 750, function()
+    Util.execute_with_delay(750, function()
         if gen == save_generation then Config.save() end
     end)
 end

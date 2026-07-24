@@ -290,7 +290,7 @@ register_hud_hook = function()
         State.hook_ids = { pre_id, post_id }
         Util.dbg("HUD hook registered")
     else
-        pcall(ExecuteWithDelay, 1000, function()
+        Util.execute_with_delay( 1000, function()
             if State.hook_ids == nil then register_hud_hook() end
         end)
     end
@@ -318,7 +318,7 @@ schedule_aim = function()
     local range = math.floor(interval * 0.1)
     local jitter = range > 0 and math.random(-range, range) or 0
     local delay = math.max(50, interval + jitter)
-    pcall(ExecuteWithDelay, delay, function()
+    Util.execute_with_delay( delay, function()
         if cfg.Enabled and (cfg.AimCard.ShowMode or "always") ~= "off"
             and not aim_scan_paused_for_modal() and not State.aim_queued then
             Util.run_queued_game_thread(State, "aim_queued", function()
@@ -362,7 +362,7 @@ schedule_nearby = function()
             jitter = math.random(-20, 20)
         end
         local delay = math.max(50, base_delay + jitter)
-        local delayed = pcall(ExecuteWithDelay, delay, function()
+        local delayed = Util.execute_with_delay( delay, function()
             if gen ~= nearby_loop_gen or not Scanner.nearby.active then return end
             if nearby_scan_paused_for_modal() then
                 delay_chain()
@@ -408,11 +408,11 @@ schedule_prefetch = function()
     local range = math.floor(base_delay * 0.1)
     local jitter = range > 0 and math.random(-range, range) or 0
     local delay_ms = math.max(10, base_delay + jitter)
-    local ok = pcall(ExecuteWithDelay, delay_ms, function()
+    local ok = Util.execute_with_delay( delay_ms, function()
         State.prefetch_timer = false
         if not cfg.Enabled or not UI.prefetch_can_run(State.settings_open) then return end
         State.prefetch_queued = true
-        local queued = pcall(ExecuteInGameThread, function()
+        local queued = Util.execute_in_game_thread( function()
             if UI.prefetch_can_run(State.settings_open) then
                 local wok, err = pcall(Profile.span, "prefetch", UI.prefetch_step)
                 if not wok then Util.log("texture prefetch error: " .. tostring(err)) end
@@ -462,7 +462,7 @@ schedule_picker_warm = function()
         local controller = Scanner.player_controller()
         if controller == nil then
             local delay = PICKER_WARM_DELAY_MS + math.random(-math.floor(PICKER_WARM_DELAY_MS * 0.1), math.floor(PICKER_WARM_DELAY_MS * 0.1))
-            pcall(ExecuteWithDelay, delay, schedule_picker_warm)
+            Util.execute_with_delay( delay, schedule_picker_warm)
             return
         end
         Picker.ensure_catalog(nil)
@@ -491,7 +491,7 @@ schedule_picker_warm = function()
         State.picker_warm_needed = false
         if State.pal_picker_open and needed then
             local delay = PICKER_WARM_DELAY_MS + math.random(-math.floor(PICKER_WARM_DELAY_MS * 0.1), math.floor(PICKER_WARM_DELAY_MS * 0.1))
-            pcall(ExecuteWithDelay, delay, schedule_picker_warm)
+            Util.execute_with_delay( delay, schedule_picker_warm)
         end
     end, "picker species warm")
 end
@@ -503,9 +503,9 @@ local function schedule_picker_cache_trim()
     local generation = State.picker_trim_generation
     -- Give the render thread several seconds to consume every portrait command
     -- submitted before the picker closed. Reopening cancels this trim pass.
-    pcall(ExecuteWithDelay, 3000, function()
+    Util.execute_with_delay( 3000, function()
         if generation ~= State.picker_trim_generation or State.pal_picker_open then return end
-        pcall(ExecuteInGameThread, function()
+        Util.execute_in_game_thread( function()
             if generation ~= State.picker_trim_generation or State.pal_picker_open then return end
             local ok, trimmed = pcall(UI.trim_picker_texture_cache, 128, 96)
             if not ok then
@@ -614,7 +614,7 @@ local queue_opening_nearby_scan
 queue_opening_nearby_scan = function(open_generation, allow_empty_retry)
     if State.nearby_queued then return false end
     State.nearby_queued = true
-    local ok = pcall(ExecuteInGameThread, function()
+    local ok = Util.execute_in_game_thread( function()
         if Scanner.nearby.active and open_generation == State.nearby_open_generation
             and not nearby_scan_paused_for_modal() then
             pcall(Scanner.scan_nearby, cfg, true)
@@ -631,7 +631,7 @@ queue_opening_nearby_scan = function(open_generation, allow_empty_retry)
             and not Scanner.has_nearby_work()
         if allow_empty_retry and empty then
             local delay = 500 + math.random(-50, 50)
-            local delayed = pcall(ExecuteWithDelay, delay, function()
+            local delayed = Util.execute_with_delay( delay, function()
                 if not Scanner.nearby.active
                     or open_generation ~= State.nearby_open_generation then return end
                 if not queue_opening_nearby_scan(open_generation, false) then
@@ -731,16 +731,16 @@ Util.log("PalScouter v" .. VERSION .. " loading (client-only, read-only)")
 -- that compile a restricted collector surface.
 local GC_PAUSE = 110
 local GC_STEP_MULTIPLIER = 300
-local pause_ok, previous_pause = pcall(collectgarbage, "setpause", GC_PAUSE)
-local step_ok, previous_step_multiplier = pcall(
-    collectgarbage, "setstepmul", GC_STEP_MULTIPLIER)
+-- FIX: Do not tune the global Garbage Collector. It affects all other mods sharing the
+-- Lua state, causing their unprotected ExecuteWithDelay callbacks to be collected.
+-- local pause_ok, previous_pause = pcall(collectgarbage, "setpause", GC_PAUSE)
+-- local step_ok, previous_step_multiplier = pcall(collectgarbage, "setstepmul", GC_STEP_MULTIPLIER)
+local pause_ok, step_ok = false, false
 if Util.PROFILE then
     if pause_ok and step_ok then
-        Util.log(string.format("GC tuned pause=%d stepmul=%d (was %s/%s)",
-            GC_PAUSE, GC_STEP_MULTIPLIER,
-            tostring(previous_pause), tostring(previous_step_multiplier)))
+        Util.log(string.format("GC tuned pause=%d stepmul=%d", GC_PAUSE, GC_STEP_MULTIPLIER))
     else
-        Util.log("WARNING: incremental GC tuning unavailable")
+        Util.log("WARNING: incremental GC tuning unavailable or disabled")
     end
 end
 
@@ -803,7 +803,7 @@ bind("RETURN", "Settings activate", function()
         return
     end
     if not State.settings_open then return end
-    pcall(ExecuteWithDelay, 40, function()
+    Util.execute_with_delay( 40, function()
         if (os.clock() - watch_aim_toggle_at) < 0.2 then return end
         if State.pal_picker_open or not State.settings_open then return end
         settings_nav("activate")
@@ -871,7 +871,7 @@ local function kick_warm()
     warm_attempts = warm_attempts + 1
     if State.warm_queued then
         local delay = 400 + math.random(-40, 40)
-        pcall(ExecuteWithDelay, delay, kick_warm)
+        Util.execute_with_delay( delay, kick_warm)
         return
     end
     Util.run_queued_game_thread(State, "warm_queued", function()
@@ -886,7 +886,7 @@ local function kick_warm()
             return
         end
         local delay = 400 + math.random(-40, 40)
-        pcall(ExecuteWithDelay, delay, kick_warm)
+        Util.execute_with_delay( delay, kick_warm)
     end, "skill cache warm")
 end
 
@@ -898,7 +898,7 @@ ensure_warm = function()
     if State.warm_started then return end
     State.warm_started = true
     local delay = 100 + math.random(-15, 15)
-    pcall(ExecuteWithDelay, delay, kick_warm)
+    Util.execute_with_delay( delay, kick_warm)
 end
 
 if cfg.Enabled and (cfg.AimCard.ShowMode or "always") ~= "off" then ensure_warm() end

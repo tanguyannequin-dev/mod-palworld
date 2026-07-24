@@ -50,10 +50,7 @@ local NEARBY_BATCH_BUDGET = 32
 local WORK_REFINES_PER_TICK = 2
 local HYDRATE_ROWS_PER_TICK = 2
 
--- UEHelpers v3 intentionally performs FindAllOf("PlayerController") on every
--- GetPlayerController call. Keep our own weak-by-validity cache so periodic
--- scans never re-enter that global search after the first successful lookup.
-local player_cache = { controller = nil, pawn = nil }
+local player_cache = { controller = nil }
 
 local function get_controller()
     return Profile.span("player.controller", function()
@@ -64,19 +61,27 @@ local function get_controller()
             player_cache.controller = pc
             return pc
         end
-        player_cache.controller, player_cache.pawn = nil, nil
+        player_cache.controller = nil
         return nil
     end)
 end
+
+local pawn_nil_since = nil
 
 local function get_pawn(controller)
     return Profile.span("player.pawn", function()
         local pawn = Util.safe_call(nil, function() return controller.Pawn end)
         if pawn ~= nil and Util.valid(pawn) then
-            player_cache.pawn = pawn
+            pawn_nil_since = nil
             return pawn
         end
-        player_cache.pawn = nil
+        local now = os.clock()
+        if pawn_nil_since == nil then
+            pawn_nil_since = now
+        elseif now - pawn_nil_since > 2.0 then
+            Scanner.reset_player_cache()
+            pawn_nil_since = now -- Wait another 2s before searching again to avoid 0xA crashes
+        end
         return nil
     end)
 end
@@ -86,7 +91,7 @@ local function get_player_pawn(controller)
 end
 
 function Scanner.reset_player_cache()
-    player_cache.controller, player_cache.pawn = nil, nil
+    player_cache.controller = nil
 end
 
 function Scanner.player_controller()
@@ -528,7 +533,7 @@ local function is_player_aiming(pawn)
     end
     if shooter == nil or not Util.valid(shooter) then return false end
     local aiming = Util.safe_call(nil, function() return shooter:IsAiming() end)
-    if aiming == nil then aiming = Util.safe_call(false, function() return shooter:IsRequestAiming() end) end
+    if not aiming then aiming = Util.safe_call(false, function() return shooter:IsRequestAiming() end) end
     return aiming == true
 end
 
@@ -707,16 +712,23 @@ function Scanner.scan_aim(cfg)
     return Profile.span("scan.aim.native", function()
         local controller = get_controller()
         if controller == nil then Scanner.clear_aim() return end
-
-        -- Detect world changes safely on the game thread
         local world = Util.safe_call(nil, function() return controller:GetWorld() end)
         local world_addr = Util.address(world)
         if world_addr ~= nil then
             if Scanner.last_world_address ~= nil and Scanner.last_world_address ~= world_addr then
                 Util.log("INFO: World changed from " .. tostring(Scanner.last_world_address) .. " to " .. tostring(world_addr) .. " - resetting native registry")
                 Scanner.reset_nearby(true)
+                Scanner.reset_player_cache()
+                Scanner.clear_aim()
+                Scanner.last_world_address = world_addr
+                return
             end
             Scanner.last_world_address = world_addr
+        end
+        -- Skip aim scanning during teleportation cooldown
+        if Scanner.teleport_cooldown ~= nil and os.clock() < Scanner.teleport_cooldown then
+            Scanner.clear_aim()
+            return
         end
         local pawn = get_player_pawn(controller)
         if pawn == nil or not actor_alive(pawn) or not is_player_aiming(pawn) then Scanner.clear_aim() return end
@@ -901,13 +913,13 @@ function Scanner.scan_nearby(cfg, start_cycle)
         local controller = get_controller()
         if controller == nil then return end
 
-        -- Detect world changes safely on the game thread
         local world = Util.safe_call(nil, function() return controller:GetWorld() end)
         local world_addr = Util.address(world)
         if world_addr ~= nil then
             if Scanner.last_world_address ~= nil and Scanner.last_world_address ~= world_addr then
                 Util.log("INFO: World changed from " .. tostring(Scanner.last_world_address) .. " to " .. tostring(world_addr) .. " - resetting native registry")
                 Scanner.reset_nearby(true)
+                Scanner.reset_player_cache()
                 Scanner.teleport_cooldown = now + 1.5
                 return
             end
@@ -926,6 +938,7 @@ function Scanner.scan_nearby(cfg, start_cycle)
                         -- Si le joueur a bougé de plus de 100 mètres (10000 uu), c'est une téléportation
                         if dist_sq > 10000 * 10000 then
                             Scanner.reset_nearby(true)
+                            Scanner.clear_aim()
                             Scanner.last_scan_x, Scanner.last_scan_y, Scanner.last_scan_z = px, py, pz
                             Scanner.teleport_cooldown = now + 1.5
                             Util.log("INFO: Teleportation detected. Pausing scan for 1.5s.")
@@ -939,7 +952,7 @@ function Scanner.scan_nearby(cfg, start_cycle)
             end
         end
 
-        local pawn = get_player_pawn(controller)
+        local pawn = player or get_player_pawn(controller)
         if pawn == nil or not actor_alive(pawn) then return end
         local changed = false
         local polled = false

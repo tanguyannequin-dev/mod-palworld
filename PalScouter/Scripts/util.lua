@@ -89,17 +89,19 @@ function Util.fixed_point_to_number(fp)
 end
 
 function Util.round(n)
+    if n == nil then return 0 end
     return math.floor(n + 0.5)
 end
 
 function Util.clamp(v, lo, hi)
+    if v == nil then return lo end
     if v < lo then return lo end
     if v > hi then return hi end
     return v
 end
 
 function Util.trim(s)
-    return tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
 function Util.lower_trim(s)
@@ -107,6 +109,7 @@ function Util.lower_trim(s)
 end
 
 function Util.full_name(obj)
+    if not Util.valid(obj) then return nil end
     local ok, result = pcall(call_full_name, obj)
     if ok then return result end
     return nil
@@ -130,14 +133,22 @@ function Util.find_first_valid(class_names)
 end
 
 -- Stable for an actor lifetime and much cheaper than GetFullName for registry keys.
+-- Returns nil for poisoned/null pointers to prevent registering invalid entries.
 function Util.address(obj)
     local ok, result = pcall(call_address, obj)
-    if ok and result ~= nil then return tonumber(result) or tostring(result) end
-    return nil
+    if not ok or result == nil then return nil end
+    local num = tonumber(result)
+    if num == 0 or num == -1 then return nil end
+    local str = tostring(result):lower()
+    if str:find("ffffffff", 1, true) or str:find("000000000000", 1, true) or str == "0" or str == "0x0" then
+        return nil
+    end
+    return num or str
 end
 
 function Util.truncate(text, max_chars)
     text = tostring(text or "")
+    max_chars = max_chars or 50
     local length = utf8 and utf8.len(text)
     if length and length > max_chars then
         local end_byte = utf8.offset(text, max_chars + 1)

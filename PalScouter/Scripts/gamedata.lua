@@ -100,7 +100,7 @@ end
 function G.build_passive_cache(_) return true end
 
 function G.passive_rank_for(raw_name)
-    if not G.passive_rank then return nil end
+    if not G.passive_rank or type(raw_name) ~= "string" then return nil end
     return G.passive_rank[string.lower(raw_name)]
 end
 
@@ -145,6 +145,7 @@ end
 -- trailing _<Element> token). Pure/string-only so it is unit-testable without
 -- the engine; every candidate is still miss-safe through localized_text.
 function G.species_name_keys(character_id)
+    if type(character_id) ~= "string" then return {} end
     local keys = { character_id }
     local base_id = character_id:gsub("^BOSS_", ""):gsub("^GYM_", ""):gsub("^PREDATOR_", "")
     if base_id ~= character_id then
@@ -165,11 +166,9 @@ local function species_via_text_table(controller, character_id)
 end
 
 function G.localize_species(controller, character_id, character_fname)
+    if type(character_id) ~= "string" then return nil end
     local cached = G.species_name_cache[character_id]
     if cached then return cached end
-    if character_fname == nil then
-        character_fname = Util.safe_call(nil, function() return FName(character_id) end)
-    end
 
     local name = species_via_text_table(controller, character_id)
 
