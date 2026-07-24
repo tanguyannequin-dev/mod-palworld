@@ -22,6 +22,7 @@ These modifications address long-standing limitations noted by the original mod 
 | **Teleportation & Fast Travel Safety** | Added a 100-meter distance jump detection. Automatically purges all C++ references and pauses the scan for 1.5 seconds during fast travel, allowing UE4 to safely garbage collect old actors without crashing. | [scanner.lua](PalScouter/Scripts/scanner.lua) |
 | **Alt-Tab / Resolution Crash Fix** | Added an explicit validity check on `hud.Canvas`. Fixes the `0x18` Access Violation that crashed the game entirely when Alt-Tabbing or resizing the window on the title screen. | [main.lua](PalScouter/Scripts/main.lua) |
 | **Capture Crash Protection** | Checked `SaveParameter` validity before querying combat stats. Fixes a fatal `EXCEPTION_ACCESS_VIOLATION` in UE4 when scanning a Pal that was just successfully captured (since its save data is transferred to the Palbox, leaving a dangling pointer). | [gamedata.lua](PalScouter/Scripts/gamedata.lua) |
+| **Poisoned Pointer Protection** | Pre-filtered `0xffffffffffffffff` (and `-1`) raw memory addresses before invoking `IsValid()`. Fixes a fatal UE4 crash during intense sphere assaults where the engine momentarily returns unmapped memory before garbage collection. | [util.lua](PalScouter/Scripts/util.lua) |
 
 
 ---
@@ -56,6 +57,8 @@ These modifications address long-standing limitations noted by the original mod 
 * **Solution 1:** Introduced `Util.valid(canvas)` before property access. The mod gracefully skips drawing while the window is being resized.
 * **Problem 2 (Capture):** Capturing a Pal transfers its internal `SaveParameter` data to the Palbox. If the mod attempted to read its HP or Attack power in the exact frame before the actor was destroyed, the C++ getter dereferenced a `nullptr`, crashing the entire game.
 * **Solution 2:** Added an explicit `parameter.SaveParameter` null-check in `G.get_parameter` before allowing any C++ stat reads.
+* **Problem 3 (Poisoned Pointers):** Spamming spheres on a single Pal causes rapid state changes. The engine occasionally returns `0xffffffffffffffff` (unmapped memory) for the reticle target. Calling `IsValid()` on this address bypasses standard Lua pcalls and instantly kills the game.
+* **Solution 3:** Hooked `Util.valid()` to inspect the raw hex address via `GetAddress()` before asking C++ to validate it. Any `-1` or `0xffffffff...` pointer is instantly rejected in Lua.
 
 ### 6. Localization & Font Geometry (`localization.lua`, `ui_settings.lua`)
 * **Problem:** Default 8px font width calculations caused long French/Spanish option names (e.g. `"SAUVAGES SEULS"`, `"LISTA DE SEGUIM."`) to overlap with `<` and `>` chevron buttons.

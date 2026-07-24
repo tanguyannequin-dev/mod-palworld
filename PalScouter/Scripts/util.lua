@@ -18,6 +18,17 @@ local function call_address(obj) return obj:GetAddress() end
 
 function Util.valid(obj)
     if obj == nil then return false end
+    -- CRITICAL FIX: Protect against poisoned/null pointers (0xffffffffffffffff, 0x0, -1)
+    -- before calling C++ functions which dereference the vtable (like GetFullName).
+    local ok_addr, addr = pcall(call_address, obj)
+    if ok_addr and addr ~= nil then
+        local num = tonumber(addr)
+        if num == 0 or num == -1 then return false end
+        local str = tostring(addr):lower()
+        if str:find("ffffffff", 1, true) or str:find("000000000000", 1, true) or str == "0" or str == "0x0" then
+            return false
+        end
+    end
     local ok, result = pcall(call_is_valid, obj)
     return ok and result == true
 end

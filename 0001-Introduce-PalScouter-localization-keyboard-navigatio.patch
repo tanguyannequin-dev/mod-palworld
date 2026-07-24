@@ -1,4 +1,4 @@
-From 314aa17bbc53cf5b0689b8c5a43ec9a4fd1810db Mon Sep 17 00:00:00 2001
+From 3cf0963a5d64266baee007e0b2207f9d6daff263 Mon Sep 17 00:00:00 2001
 From: contact71 <contact@etabli-digital.com>
 Date: Tue, 21 Jul 2026 16:24:46 +0200
 Subject: [PATCH] Introduce PalScouter localization, keyboard navigation
@@ -22,11 +22,11 @@ Subject: [PATCH] Introduce PalScouter localization, keyboard navigation
  PalScouter/Scripts/ui_list.lua        |  161 +++
  PalScouter/Scripts/ui_pal_picker.lua  |  495 ++++++++
  PalScouter/Scripts/ui_settings.lua    |  223 ++++
- PalScouter/Scripts/util.lua           |  175 +++
+ PalScouter/Scripts/util.lua           |  186 +++
  PalScouter/Scripts/waza_ids.lua       |  396 ++++++
  PalScouter/dlls/main.dll              |  Bin 0 -> 517632 bytes
- README.md                             |   72 +-
- 21 files changed, 8630 insertions(+), 1 deletion(-)
+ README.md                             |   75 +-
+ 21 files changed, 8644 insertions(+), 1 deletion(-)
  create mode 100644 PalScouter/PalScouter.userconfig.lua
  create mode 100644 PalScouter/Scripts/config.lua
  create mode 100644 PalScouter/Scripts/direction.lua
@@ -8140,10 +8140,10 @@ index 0000000..bc3212a
 +return Settings
 diff --git a/PalScouter/Scripts/util.lua b/PalScouter/Scripts/util.lua
 new file mode 100644
-index 0000000..e099e56
+index 0000000..5425b8b
 --- /dev/null
 +++ b/PalScouter/Scripts/util.lua
-@@ -0,0 +1,175 @@
+@@ -0,0 +1,186 @@
 +-- PalScouter util.lua — hardened helpers
 +local Util = {}
 +
@@ -8164,6 +8164,17 @@ index 0000000..e099e56
 +
 +function Util.valid(obj)
 +    if obj == nil then return false end
++    -- CRITICAL FIX: Protect against poisoned/null pointers (0xffffffffffffffff, 0x0, -1)
++    -- before calling C++ functions which dereference the vtable (like GetFullName).
++    local ok_addr, addr = pcall(call_address, obj)
++    if ok_addr and addr ~= nil then
++        local num = tonumber(addr)
++        if num == 0 or num == -1 then return false end
++        local str = tostring(addr):lower()
++        if str:find("ffffffff", 1, true) or str:find("000000000000", 1, true) or str == "0" or str == "0x0" then
++            return false
++        end
++    end
 +    local ok, result = pcall(call_is_valid, obj)
 +    return ok and result == true
 +end
@@ -13646,10 +13657,10 @@ literal 0
 HcmV?d00001
 
 diff --git a/README.md b/README.md
-index edc4b47..ccf68f0 100644
+index edc4b47..35c0117 100644
 --- a/README.md
 +++ b/README.md
-@@ -1 +1,71 @@
+@@ -1 +1,74 @@
 -# mod-palworld
 \ No newline at end of file
 +# PalScouter Enhanced: Localizations, Mount Support, Dynamic Reticle & Self-Healing Watchdogs
@@ -13676,6 +13687,7 @@ index edc4b47..ccf68f0 100644
 +| **Teleportation & Fast Travel Safety** | Added a 100-meter distance jump detection. Automatically purges all C++ references and pauses the scan for 1.5 seconds during fast travel, allowing UE4 to safely garbage collect old actors without crashing. | [scanner.lua](PalScouter/Scripts/scanner.lua) |
 +| **Alt-Tab / Resolution Crash Fix** | Added an explicit validity check on `hud.Canvas`. Fixes the `0x18` Access Violation that crashed the game entirely when Alt-Tabbing or resizing the window on the title screen. | [main.lua](PalScouter/Scripts/main.lua) |
 +| **Capture Crash Protection** | Checked `SaveParameter` validity before querying combat stats. Fixes a fatal `EXCEPTION_ACCESS_VIOLATION` in UE4 when scanning a Pal that was just successfully captured (since its save data is transferred to the Palbox, leaving a dangling pointer). | [gamedata.lua](PalScouter/Scripts/gamedata.lua) |
++| **Poisoned Pointer Protection** | Pre-filtered `0xffffffffffffffff` (and `-1`) raw memory addresses before invoking `IsValid()`. Fixes a fatal UE4 crash during intense sphere assaults where the engine momentarily returns unmapped memory before garbage collection. | [util.lua](PalScouter/Scripts/util.lua) |
 +
 +
 +---
@@ -13710,6 +13722,8 @@ index edc4b47..ccf68f0 100644
 +* **Solution 1:** Introduced `Util.valid(canvas)` before property access. The mod gracefully skips drawing while the window is being resized.
 +* **Problem 2 (Capture):** Capturing a Pal transfers its internal `SaveParameter` data to the Palbox. If the mod attempted to read its HP or Attack power in the exact frame before the actor was destroyed, the C++ getter dereferenced a `nullptr`, crashing the entire game.
 +* **Solution 2:** Added an explicit `parameter.SaveParameter` null-check in `G.get_parameter` before allowing any C++ stat reads.
++* **Problem 3 (Poisoned Pointers):** Spamming spheres on a single Pal causes rapid state changes. The engine occasionally returns `0xffffffffffffffff` (unmapped memory) for the reticle target. Calling `IsValid()` on this address bypasses standard Lua pcalls and instantly kills the game.
++* **Solution 3:** Hooked `Util.valid()` to inspect the raw hex address via `GetAddress()` before asking C++ to validate it. Any `-1` or `0xffffffff...` pointer is instantly rejected in Lua.
 +
 +### 6. Localization & Font Geometry (`localization.lua`, `ui_settings.lua`)
 +* **Problem:** Default 8px font width calculations caused long French/Spanish option names (e.g. `"SAUVAGES SEULS"`, `"LISTA DE SEGUIM."`) to overlap with `<` and `>` chevron buttons.
